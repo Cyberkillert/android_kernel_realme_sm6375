@@ -294,12 +294,13 @@ static int __init androidboot_startupmode(char *p)
 {
 	char *offset_addr;
 
-	if (strcmp(p, "usb_charger"))
+	if (strcmp(p, "dc_charger"))
 		return 1;
 
-	if ((offset_addr =
-		     strstr(boot_command_line, "androidboot.mode=normal")))
-		memset(offset_addr, ' ', sizeof("androidboot.mode=normal"));
+	if ((offset_addr = strstr(boot_command_line, "androidboot.mode=normal"))) {
+		memcpy(offset_addr, "androidboot.mode=charger", sizeof("androidboot.mode=charger") - 1);
+		offset_addr[sizeof("androidboot.mode=charger") - 1] = ' ';
+	}
 
 	return 0;
 }
