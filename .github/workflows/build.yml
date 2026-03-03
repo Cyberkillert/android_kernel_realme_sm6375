@@ -31,7 +31,7 @@ jobs:
           make O=out -j$(nproc)
 
       - name: Upload kernel image
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: kernel-image
           path: out/arch/arm64/boot/Image
