@@ -28,26 +28,22 @@ jobs:
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
-          export LLVM=1
-          export LLVM_IAS=1
+
+          # FIX: get exact clang folder name
+          CLANG_DIR=$(ls clang | grep clang-r)
+          export PATH=$PWD/clang/$CLANG_DIR/bin:$PATH
+
           export CC=clang
           export LD=ld.lld
-          export PATH=$PWD/clang/clang-r*/bin:$PATH
+          export LLVM=1
+          export LLVM_IAS=1
 
-          # Clean previous builds
           make O=out clean
-
-          # IMPORTANT: Change this if your defconfig name is different
           make O=out defconfig
-
-          # Build
           make O=out -j$(nproc)
 
       - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
         with:
           name: RMX3660-Kernel-Image
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
-            out/arch/arm64/boot/Image.gz-dtb
+          path: out/arch/arm64/boot/Image
