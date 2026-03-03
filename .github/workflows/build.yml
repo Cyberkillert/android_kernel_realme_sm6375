@@ -14,35 +14,24 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y bc bison flex libssl-dev build-essential \
-          clang lld llvm
+          sudo apt install -y bc bison flex libssl-dev build-essential git curl
 
-      - name: Build Kernel
+      - name: Setup AOSP Clang
+        run: |
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
+
+      - name: Build Kernel (GKI)
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
-          export LLVM=1
-          export LLVM_IAS=1
+          export PATH=$PWD/clang/clang-r*/bin:$PATH
           export CC=clang
           export LD=ld.lld
 
-          make O=out defconfig
-
-          # Disable problematic features
-          scripts/config --file out/.config -d CONFIG_BPF
-          scripts/config --file out/.config -d CONFIG_BPF_SYSCALL
-          scripts/config --file out/.config -d CONFIG_BPF_JIT
-          scripts/config --file out/.config -d CONFIG_BPF_EVENTS
-          scripts/config --file out/.config -d CONFIG_TASKSTATS
-          scripts/config --file out/.config -d CONFIG_TASK_XACCT
-          scripts/config --file out/.config -d CONFIG_TASK_IO_ACCOUNTING
-
-          # IMPORTANT: Regenerate config
-          make O=out olddefconfig
-
+          make O=out gki_defconfig
           make O=out -j$(nproc)
 
-      - name: Upload kernel image
+      - name: Upload Image
         uses: actions/upload-artifact@v4
         with:
           name: kernel-image
