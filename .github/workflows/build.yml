@@ -1,4 +1,4 @@
-name: Build Android GKI Kernel
+name: Build RMX3660 Kernel (SM6375)
 
 on:
   workflow_dispatch:
@@ -8,33 +8,46 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Install dependencies
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
         run: |
           sudo apt update
-          sudo apt install -y git bc bison flex build-essential \
-          libssl-dev curl python3 rsync
+          sudo apt install -y \
+          bc bison flex build-essential \
+          libssl-dev libelf-dev curl git \
+          zip unzip python3
 
-      - name: Install repo tool
+      - name: Clone Android Clang
         run: |
-          curl https://storage.googleapis.com/git-repo-downloads/repo > repo
-          chmod a+x repo
-          sudo mv repo /usr/local/bin/
+          git clone --depth=1 \
+          https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
 
-      - name: Sync kernel source
+      - name: Build Kernel
         run: |
-          mkdir android-kernel
-          cd android-kernel
-          repo init -u https://android.googlesource.com/kernel/manifest -b android-5.10
-          repo sync -j$(nproc)
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          export CC=clang
+          export LD=ld.lld
+          export PATH=$PWD/clang/clang-r*/bin:$PATH
 
-      - name: Build GKI Kernel
-        run: |
-          cd android-kernel/common
-          BUILD_CONFIG=common/build.config.gki.aarch64 \
-          ./build/build.sh
+          # Clean previous builds
+          make O=out clean
 
-      - name: Upload Image
+          # IMPORTANT: Change this if your defconfig name is different
+          make O=out defconfig
+
+          # Build
+          make O=out -j$(nproc)
+
+      - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
         with:
-          name: gki-image
-          path: android-kernel/out/android-*/dist/Image
+          name: RMX3660-Kernel-Image
+          path: |
+            out/arch/arm64/boot/Image
+            out/arch/arm64/boot/Image.gz
+            out/arch/arm64/boot/Image.gz-dtb
