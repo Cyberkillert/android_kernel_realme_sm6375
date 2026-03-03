@@ -1,0 +1,37 @@
+name: Build Realme sm6375 Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v3
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison flex libssl-dev build-essential
+
+      - name: Setup Clang (AOSP)
+        run: |
+          git clone --depth=1 https://github.com/llvm/llvm-project clang
+          export PATH=$PWD/clang/bin:$PATH
+
+      - name: Build Kernel
+        run: |
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
+          make O=out realme_sm6375_defconfig
+          make O=out -j$(nproc)
+
+      - name: Upload kernel image
+        uses: actions/upload-artifact@v3
+        with:
+          name: kernel-image
+          path: out/arch/arm64/boot/Image
