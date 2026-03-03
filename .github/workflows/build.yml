@@ -18,6 +18,8 @@ jobs:
           bc bison flex build-essential \
           libssl-dev libelf-dev \
           clang lld llvm \
+          gcc-aarch64-linux-gnu \
+          binutils-aarch64-linux-gnu \
           curl git zip unzip python3
 
       - name: Build Kernel
@@ -26,15 +28,10 @@ jobs:
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
+          export CROSS_COMPILE=aarch64-linux-gnu-
 
-          # Clean previous build
           make O=out clean
-
-          # If you have custom config like realme_sm6375_defconfig
-          # replace defconfig below with that name
           make O=out defconfig
-
-          # Build using all cores
           make O=out -j$(nproc)
 
       - name: Upload Kernel Image
