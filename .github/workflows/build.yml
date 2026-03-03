@@ -9,17 +9,13 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y bc bison flex libssl-dev build-essential
-
-      - name: Setup Clang (AOSP)
-        run: |
-          git clone --depth=1 https://github.com/llvm/llvm-project clang
-          export PATH=$PWD/clang/bin:$PATH
+          sudo apt install -y bc bison flex libssl-dev build-essential \
+          clang lld llvm
 
       - name: Build Kernel
         run: |
@@ -27,6 +23,9 @@ jobs:
           export SUBARCH=arm64
           export LLVM=1
           export LLVM_IAS=1
+          export CC=clang
+          export LD=ld.lld
+
           make O=out realme_sm6375_defconfig
           make O=out -j$(nproc)
 
