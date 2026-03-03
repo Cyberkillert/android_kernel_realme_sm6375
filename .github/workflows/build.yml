@@ -37,6 +37,9 @@ jobs:
           scripts/config --file out/.config -d CONFIG_TASK_XACCT
           scripts/config --file out/.config -d CONFIG_TASK_IO_ACCOUNTING
 
+          # IMPORTANT: Regenerate config
+          make O=out olddefconfig
+
           make O=out -j$(nproc)
 
       - name: Upload kernel image
