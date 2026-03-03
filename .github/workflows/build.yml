@@ -1,20 +1,40 @@
-- name: Build Kernel
+name: Build Android GKI Kernel
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Install dependencies
         run: |
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export OUT_DIR=$PWD/out
-          export DIST_DIR=$PWD/dist
-          export PATH=$PWD/clang/clang-r*/bin:$PATH
+          sudo apt update
+          sudo apt install -y git bc bison flex build-essential \
+          libssl-dev curl python3 rsync
 
-          cd kernel
+      - name: Install repo tool
+        run: |
+          curl https://storage.googleapis.com/git-repo-downloads/repo > repo
+          chmod a+x repo
+          sudo mv repo /usr/local/bin/
 
+      - name: Sync kernel source
+        run: |
+          mkdir android-kernel
+          cd android-kernel
+          repo init -u https://android.googlesource.com/kernel/manifest -b android-5.10
+          repo sync -j$(nproc)
+
+      - name: Build GKI Kernel
+        run: |
+          cd android-kernel/common
           BUILD_CONFIG=common/build.config.gki.aarch64 \
-          OUT_DIR=$OUT_DIR \
-          DIST_DIR=$DIST_DIR \
-          ../build/build.sh
+          ./build/build.sh
 
-          - name: Upload Image
+      - name: Upload Image
         uses: actions/upload-artifact@v4
         with:
           name: gki-image
-          path: dist/Image
+          path: android-kernel/out/android-*/dist/Image
