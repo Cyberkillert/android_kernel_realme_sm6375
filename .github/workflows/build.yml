@@ -27,6 +27,13 @@ jobs:
           export LD=ld.lld
 
           make O=out defconfig
+
+          # Disable BPF (fix RCU trace error)
+          scripts/config --file out/.config -d CONFIG_BPF
+          scripts/config --file out/.config -d CONFIG_BPF_SYSCALL
+          scripts/config --file out/.config -d CONFIG_BPF_JIT
+          scripts/config --file out/.config -d CONFIG_BPF_EVENTS
+
           make O=out -j$(nproc)
 
       - name: Upload kernel image
