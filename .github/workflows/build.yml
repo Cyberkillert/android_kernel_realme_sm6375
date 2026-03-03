@@ -21,17 +21,22 @@ jobs:
 
       - name: Clone Android Clang
         run: |
-          git clone --depth=1 \
-          https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
+          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
 
       - name: Build Kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
 
-          # FIX: get exact clang folder name
-          CLANG_DIR=$(ls clang | grep clang-r)
-          export PATH=$PWD/clang/$CLANG_DIR/bin:$PATH
+          # Find actual clang directory
+          CLANG_PATH=$(find clang -type d -name "clang-r*" | head -n 1)
+
+          echo "Using Clang at: $CLANG_PATH"
+
+          export PATH=$PWD/$CLANG_PATH/bin:$PATH
+
+          # Confirm ld.lld exists
+          which ld.lld || exit 1
 
           export CC=clang
           export LD=ld.lld
