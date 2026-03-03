@@ -11,37 +11,26 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install Dependencies + LLVM
         run: |
           sudo apt update
           sudo apt install -y \
           bc bison flex build-essential \
           libssl-dev libelf-dev curl git \
-          zip unzip python3
-
-      - name: Clone Android Clang
-        run: |
-          git clone https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
+          zip unzip python3 \
+          clang lld llvm
 
       - name: Build Kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
-
-          # Find actual clang directory
-          CLANG_PATH=$(find clang -type d -name "clang-r*" | head -n 1)
-
-          echo "Using Clang at: $CLANG_PATH"
-
-          export PATH=$PWD/$CLANG_PATH/bin:$PATH
-
-          # Confirm ld.lld exists
-          which ld.lld || exit 1
-
           export CC=clang
           export LD=ld.lld
           export LLVM=1
           export LLVM_IAS=1
+
+          which clang
+          which ld.lld
 
           make O=out clean
           make O=out defconfig
