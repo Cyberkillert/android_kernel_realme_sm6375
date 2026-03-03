@@ -1,4 +1,4 @@
-name: Build Realme sm6375 Kernel
+name: Build Android GKI Kernel
 
 on:
   workflow_dispatch:
@@ -8,31 +8,27 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
       - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y bc bison flex libssl-dev build-essential git curl
+          sudo apt install -y git bc bison flex build-essential libssl-dev curl python3
 
-      - name: Setup AOSP Clang
+      - name: Clone kernel
+        run: |
+          git clone --depth=1 https://android.googlesource.com/kernel/common -b android-5.10 kernel
+
+      - name: Clone build system
+        run: |
+          git clone --depth=1 https://android.googlesource.com/kernel/build build
+
+      - name: Clone clang
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
 
-      - name: Build Kernel (GKI)
+      - name: Build Kernel
         run: |
           export ARCH=arm64
           export SUBARCH=arm64
           export PATH=$PWD/clang/clang-r*/bin:$PATH
-          export CC=clang
-          export LD=ld.lld
-
-          make O=out gki_defconfig
-          make O=out -j$(nproc)
-
-      - name: Upload Image
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel-image
-          path: out/arch/arm64/boot/Image
+          cd kernel
+          ../build/build.sh
