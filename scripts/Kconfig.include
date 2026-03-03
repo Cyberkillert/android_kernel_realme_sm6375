@@ -35,12 +35,18 @@ ld-option = $(success,$(LD) -v $(1))
 # Return y if the assembler supports <instr>, n otherwise
 as-instr = $(success,printf "%b\n" "$(1)" | $(CC) $(CLANG_FLAGS) -c -x assembler -o /dev/null -)
 
-# check if $(CC) and $(LD) exist
+# check if $(CC) exists
 $(error-if,$(failure,command -v $(CC)),compiler '$(CC)' not found)
-$(error-if,$(failure,command -v $(LD)),linker '$(LD)' not found)
 
-# Fail if the linker is gold as it's not capable of linking the kernel proper
+# Only check linker if LD is explicitly set
+ifdef LD
+$(error-if,$(failure,command -v $(LD)),linker '$(LD)' not found)
+endif
+
+# Fail if the linker is gold
+ifdef LD
 $(error-if,$(success, $(LD) -v | grep -q gold), gold linker '$(LD)' not supported)
+endif
 
 # gcc version including patch level
 gcc-version := $(shell,$(srctree)/scripts/gcc-version.sh $(CC))
