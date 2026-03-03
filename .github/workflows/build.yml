@@ -28,11 +28,14 @@ jobs:
 
           make O=out defconfig
 
-          # Disable BPF (fix RCU trace error)
+          # Disable problematic features
           scripts/config --file out/.config -d CONFIG_BPF
           scripts/config --file out/.config -d CONFIG_BPF_SYSCALL
           scripts/config --file out/.config -d CONFIG_BPF_JIT
           scripts/config --file out/.config -d CONFIG_BPF_EVENTS
+          scripts/config --file out/.config -d CONFIG_TASKSTATS
+          scripts/config --file out/.config -d CONFIG_TASK_XACCT
+          scripts/config --file out/.config -d CONFIG_TASK_IO_ACCOUNTING
 
           make O=out -j$(nproc)
 
