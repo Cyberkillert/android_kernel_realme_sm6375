@@ -15,18 +15,28 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y bc bison flex build-essential libssl-dev libelf-dev \
-          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu curl git zip unzip python3
+          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu curl git zip unzip python3 file
 
       - name: Download AOSP Clang
         run: |
           mkdir -p $GITHUB_WORKSPACE/clang
-          # Using Clang r450784d which is the standard for SM6375 Android 12/13
-          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz
-          tar -C $GITHUB_WORKSPACE/clang -xzf clang-r450784d.tar.gz
+          # Using a direct archive link from Google Source
+          # We use the 'r450784d' version which is highly compatible with Holi kernels
+          cd $GITHUB_WORKSPACE/clang
+          curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz"
+          
+          # Verification: Ensure it's not an HTML error page
+          if file clang.tar.gz | grep -q "gzip compressed data"; then
+              tar -xzf clang.tar.gz
+              echo "Clang extracted successfully."
+          else
+              echo "ERROR: Download failed. Google Source served an HTML page instead of a zip."
+              exit 1
+          fi
 
       - name: Build Kernel
         run: |
-          # Add Clang to PATH to provide 'ld.lld'
+          # Add Clang to PATH so the build system finds 'ld.lld'
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
           export ARCH=arm64
@@ -38,20 +48,25 @@ jobs:
 
           mkdir -p out
           
-          # 1. Generate the base GKI config
+          # Step 1: Initialize with GKI base config
           make O=out gki_defconfig
           
-          # 2. Merge the Realme/Oplus vendor configuration
-          # For SM6375 (Holi), the specific target is usually holi.config
-          scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/holi.config
+          # Step 2: Merge the Realme/Holi vendor fragments
+          # This repo uses the GKI structure where vendor configs are merged
+          if [ -f arch/arm64/configs/vendor/holi.config ]; then
+              scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/holi.config
+          else
+              echo "Warning: holi.config not found, trying vendor/sm6375.config"
+              scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/sm6375.config
+          fi
           
-          # 3. Build the kernel
+          # Step 3: Final compilation
           make O=out -j$(nproc)
 
-      - name: Upload Artifacts
+      - name: Upload Kernel Image
         uses: actions/upload-artifact@v4
         with:
-          name: RMX3660-Kernel
+          name: RMX3660-Kernel-Image
           path: |
             out/arch/arm64/boot/Image
             out/arch/arm64/boot/Image.gz
