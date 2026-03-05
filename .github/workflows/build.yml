@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
 
@@ -16,9 +17,9 @@ jobs:
           sudo apt update
           sudo apt install -y \
           git bc bison flex build-essential \
-          libssl-dev curl python3 rsync
+          libssl-dev curl python3 rsync zip
 
-      - name: Clone Android Kernel Build System
+      - name: Clone Kernel Build System
         run: |
           git clone https://android.googlesource.com/kernel/build kernel-build
 
@@ -26,14 +27,26 @@ jobs:
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
 
+      - name: Clone AnyKernel3
+        run: |
+          git clone https://github.com/osm0sis/AnyKernel3
+
       - name: Build Kernel
         run: |
           export PATH=$PWD/clang/clang-r*/bin:$PATH
           export BUILD_CONFIG=build.config.msm.gki
-          bash kernel-build/build.sh
+          bash kernel-build/build/build.sh
 
-      - name: Upload Kernel
+      - name: Prepare Flashable Zip
+        run: |
+          cp out/android-kernel/dist/Image AnyKernel3/
+          cd AnyKernel3
+          zip -r9 Realme_SM6375_Kernel.zip *
+
+      - name: Upload Kernel Files
         uses: actions/upload-artifact@v4
         with:
-          name: Realme-Kernel
-          path: out/android-kernel/dist/*
+          name: Kernel-Build
+          path: |
+            out/android-kernel/dist/*
+            AnyKernel3/Realme_SM6375_Kernel.zip
