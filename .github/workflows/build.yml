@@ -1,4 +1,4 @@
-name: Build RMX3660 Kernel (SM6375)
+name: Build Realme SM6375 Kernel
 
 on:
   workflow_dispatch:
@@ -14,60 +14,26 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt update
-          sudo apt install -y bc bison flex build-essential libssl-dev libelf-dev \
-          gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu curl git zip unzip python3 file
+          sudo apt install -y \
+            git bc bison flex build-essential \
+            libssl-dev curl python3 rsync
 
-      - name: Download AOSP Clang
+      - name: Clone Android Kernel Build System
         run: |
-          mkdir -p $GITHUB_WORKSPACE/clang
-          # Use the +archive/refs format which works for automated downloads from Google Source
-          cd $GITHUB_WORKSPACE/clang
-          curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz"
-          
-          # Verification: If the file is less than 10KB, it's an HTML error page, not a toolchain
-          if [ $(stat -c%s "clang.tar.gz") -lt 10000 ]; then
-              echo "ERROR: Download failed. Received an HTML error page instead of Clang."
-              exit 1
-          fi
-          
-          tar -xzf clang.tar.gz
-          echo "Clang toolchain extracted successfully."
+          git clone https://android.googlesource.com/kernel/build
+
+      - name: Download Clang Toolchain
+        run: |
+          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
 
       - name: Build Kernel
         run: |
-          # Add the downloaded Clang to the PATH so 'make' finds 'ld.lld'
-          export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
-          
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export LLVM=1
-          export LLVM_IAS=1
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          export PATH=$PWD/clang/clang-r*/bin:$PATH
+          export BUILD_CONFIG=build.config.msm.gki
+          ./build/build.sh
 
-          mkdir -p out
-          
-          # Step 1: Initialize with GKI base config
-          make O=out gki_defconfig
-          
-          # Step 2: Merge the Realme/Holi vendor configuration
-          # This repository uses the GKI structure where vendor configs are merged
-          if [ -f arch/arm64/configs/vendor/holi.config ]; then
-              scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/holi.config
-          else
-              echo "holi.config not found. Checking for alternative..."
-              scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/sm6375.config
-          fi
-          
-          # Step 3: Compile the kernel
-          make O=out -j$(nproc)
-
-      - name: Upload Kernel Image
+      - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: RMX3660-Kernel-Image
-          path: |
-            out/arch/arm64/boot/Image
-            out/arch/arm64/boot/Image.gz
-            out/arch/arm64/boot/dtbo.img
-            
+          name: Kernel
+          path: out/android-kernel/dist/*
