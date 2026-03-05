@@ -1,4 +1,4 @@
-name: Build Realme SM6375 Kernel
+name: Build Realme Kernel
 
 on:
   workflow_dispatch:
@@ -8,32 +8,34 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout Kernel
         uses: actions/checkout@v4
 
       - name: Install Dependencies
         run: |
           sudo apt update
           sudo apt install -y \
-            git bc bison flex build-essential \
-            libssl-dev curl python3 rsync
+          git bc bison flex build-essential \
+          libssl-dev curl python3 rsync
 
-      - name: Clone Android Kernel Build System
+      - name: Clone Kernel Build System
         run: |
           git clone https://android.googlesource.com/kernel/build
 
-      - name: Download Clang Toolchain
+      - name: Clone Clang Toolchain
         run: |
           git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
 
       - name: Build Kernel
         run: |
           export PATH=$PWD/clang/clang-r*/bin:$PATH
-          export BUILD_CONFIG=build.config.msm.gki
+          export BUILD_CONFIG=build.config.aarch64
           ./build/build.sh
 
       - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
           name: Kernel
-          path: out/android-kernel/dist/*
+          path: |
+            out/android-kernel/dist/*
+            arch/arm64/boot/Image*
