@@ -20,23 +20,22 @@ jobs:
       - name: Download AOSP Clang
         run: |
           mkdir -p $GITHUB_WORKSPACE/clang
-          # Using a direct archive link from Google Source
-          # We use the 'r450784d' version which is highly compatible with Holi kernels
+          # Use the +archive/refs format which works for automated downloads from Google Source
           cd $GITHUB_WORKSPACE/clang
           curl -Lo clang.tar.gz "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/main/clang-r450784d.tar.gz"
           
-          # Verification: Ensure it's not an HTML error page
-          if file clang.tar.gz | grep -q "gzip compressed data"; then
-              tar -xzf clang.tar.gz
-              echo "Clang extracted successfully."
-          else
-              echo "ERROR: Download failed. Google Source served an HTML page instead of a zip."
+          # Verification: If the file is less than 10KB, it's an HTML error page, not a toolchain
+          if [ $(stat -c%s "clang.tar.gz") -lt 10000 ]; then
+              echo "ERROR: Download failed. Received an HTML error page instead of Clang."
               exit 1
           fi
+          
+          tar -xzf clang.tar.gz
+          echo "Clang toolchain extracted successfully."
 
       - name: Build Kernel
         run: |
-          # Add Clang to PATH so the build system finds 'ld.lld'
+          # Add the downloaded Clang to the PATH so 'make' finds 'ld.lld'
           export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
           
           export ARCH=arm64
@@ -51,16 +50,16 @@ jobs:
           # Step 1: Initialize with GKI base config
           make O=out gki_defconfig
           
-          # Step 2: Merge the Realme/Holi vendor fragments
-          # This repo uses the GKI structure where vendor configs are merged
+          # Step 2: Merge the Realme/Holi vendor configuration
+          # This repository uses the GKI structure where vendor configs are merged
           if [ -f arch/arm64/configs/vendor/holi.config ]; then
               scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/holi.config
           else
-              echo "Warning: holi.config not found, trying vendor/sm6375.config"
+              echo "holi.config not found. Checking for alternative..."
               scripts/kconfig/merge_config.sh -O out out/.config arch/arm64/configs/vendor/sm6375.config
           fi
           
-          # Step 3: Final compilation
+          # Step 3: Compile the kernel
           make O=out -j$(nproc)
 
       - name: Upload Kernel Image
