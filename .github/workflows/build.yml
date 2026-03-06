@@ -12,7 +12,7 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt update
           sudo apt install -y \
@@ -20,54 +20,23 @@ jobs:
           libssl-dev curl git zip unzip \
           python3
 
-      - name: Clone Proton Clang
+      - name: Clone Clang Toolchain
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-      - name: Detect Defconfig
+      - name: Make build script executable
         run: |
-          echo "Searching for DEFCONFIG in build.config files..."
-
-          DEFCONFIG=$(grep -h "^DEFCONFIG=" build.config* 2>/dev/null | head -n1 | cut -d= -f2)
-
-          if [ -z "$DEFCONFIG" ]; then
-            echo "No DEFCONFIG found in build.config, selecting first available..."
-            DEFCONFIG=$(ls arch/arm64/configs | grep defconfig | head -n1)
-          fi
-
-          echo "Detected defconfig: $DEFCONFIG"
-
-          echo "DEFCONFIG=$DEFCONFIG" >> $GITHUB_ENV
+          chmod +x build/build.sh
 
       - name: Build Kernel
         run: |
-          export ARCH=arm64
-          export SUBARCH=arm64
           export PATH=$PWD/clang/bin:$PATH
-
-          mkdir -p out
-
-          echo "Using defconfig: $DEFCONFIG"
-
-          make O=out ARCH=arm64 $DEFCONFIG
-
-          make -j$(nproc) \
-          O=out \
-          ARCH=arm64 \
-          CC=clang \
-          LD=ld.lld \
-          AR=llvm-ar \
-          NM=llvm-nm \
-          OBJCOPY=llvm-objcopy \
-          OBJDUMP=llvm-objdump \
-          STRIP=llvm-strip \
-          LLVM=1 \
-          LLVM_IAS=1
+          ./build/build.sh
 
       - name: Upload Kernel Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-build
+          name: kernel-output
           path: |
             out/arch/arm64/boot/Image*
             out/arch/arm64/boot/dts/**/*.dtb
