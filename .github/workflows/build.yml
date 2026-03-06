@@ -9,34 +9,33 @@ jobs:
 
     steps:
 
-      - name: Checkout Kernel Source
+      - name: Checkout Kernel
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
           bc bison flex build-essential \
-          libssl-dev curl git zip unzip \
-          python3
+          libssl-dev git curl zip unzip python3
 
-      - name: Clone Clang Toolchain
+      - name: Clone clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
+      - name: Add clang to PATH
+        run: echo "$PWD/clang/bin" >> $GITHUB_PATH
+
       - name: Make build script executable
-        run: |
-          chmod +x build/build.sh
+        run: chmod +x build/build.sh
 
-      - name: Build Kernel
-        run: |
-          export PATH=$PWD/clang/bin:$PATH
-          ./build/build.sh
+      - name: Build kernel
+        run: ./build/build.sh
 
-      - name: Upload Kernel Artifacts
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-output
+          name: kernel
           path: |
             out/arch/arm64/boot/Image*
             out/arch/arm64/boot/dts/**/*.dtb
