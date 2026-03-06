@@ -1,4 +1,4 @@
-name: Build Realme SM6375 Kernel
+name: Build Kernel
 
 on:
   workflow_dispatch:
@@ -9,44 +9,31 @@ jobs:
 
     steps:
 
-      - name: Checkout Kernel Source
+      - name: Checkout Source
         uses: actions/checkout@v4
 
       - name: Install Dependencies
         run: |
           sudo apt update
           sudo apt install -y \
-          git bc bison flex build-essential \
-          libssl-dev curl python3 rsync zip
+          bc bison flex build-essential \
+          libssl-dev curl git
 
-      - name: Clone Kernel Build System
+      - name: Install Clang
         run: |
-          git clone https://android.googlesource.com/kernel/build kernel-build
-
-      - name: Clone Clang Toolchain
-        run: |
-          git clone --depth=1 https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang
-
-      - name: Clone AnyKernel3
-        run: |
-          git clone https://github.com/osm0sis/AnyKernel3
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
       - name: Build Kernel
         run: |
-          export PATH=$PWD/clang/clang-r*/bin:$PATH
-          export BUILD_CONFIG=build.config.msm.gki
-          bash kernel-build/build/build.sh
+          export ARCH=arm64
+          export PATH=$PWD/clang/bin:$PATH
 
-      - name: Prepare Flashable Zip
-        run: |
-          cp out/android-kernel/dist/Image AnyKernel3/
-          cd AnyKernel3
-          zip -r9 Realme_SM6375_Kernel.zip *
+          make O=out ARCH=arm64 gki_defconfig
+          make -j$(nproc) O=out ARCH=arm64 CC=clang
 
-      - name: Upload Kernel Files
+      - name: Upload Kernel
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-Build
+          name: Kernel
           path: |
-            out/android-kernel/dist/*
-            AnyKernel3/Realme_SM6375_Kernel.zip
+            out/arch/arm64/boot/Image*
