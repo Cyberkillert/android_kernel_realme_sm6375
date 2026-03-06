@@ -2,41 +2,55 @@ name: Build Android Kernel
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - lineage-23.2
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
 
     steps:
+    - name: Checkout Source
+      uses: actions/checkout@v4
 
-      - name: Checkout Kernel
-        uses: actions/checkout@v4
+    - name: Install Dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+        bc bison build-essential curl flex git kmod \
+        libssl-dev libelf-dev libncurses-dev \
+        python3 unzip zip cpio device-tree-compiler
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-          bc bison flex build-essential \
-          libssl-dev git curl zip unzip python3
+    - name: Clone Proton Clang
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-      - name: Clone clang
-        run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+    - name: Setup Environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
 
-      - name: Add clang to PATH
-        run: echo "$PWD/clang/bin" >> $GITHUB_PATH
+    - name: Build Kernel
+      run: |
+        export PATH=$PWD/clang/bin:$PATH
 
-      - name: Make build script executable
-        run: chmod +x build/build.sh
+        mkdir -p out
 
-      - name: Build kernel
-        run: ./build/build.sh
+        make O=out ARCH=arm64 holi-qgki_defconfig
+        make O=out ARCH=arm64 olddefconfig
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: kernel
-          path: |
-            out/arch/arm64/boot/Image*
-            out/arch/arm64/boot/dts/**/*.dtb
-            out/vmlinux
+        make -j$(nproc) \
+        O=out \
+        ARCH=arm64 \
+        LLVM=1 \
+        LLVM_IAS=1 \
+        CROSS_COMPILE=aarch64-linux-gnu-
+
+    - name: Upload Kernel
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Image
+        path: |
+          out/arch/arm64/boot/Image*
+          out/arch/arm64/boot/dts/**/*.dtb
