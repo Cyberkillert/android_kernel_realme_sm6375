@@ -12,45 +12,52 @@ jobs:
 
     steps:
     - name: Checkout Source
-      uses: actions/checkout@v4
+  uses: actions/checkout@v4
 
-    - name: Install Dependencies
-      run: |
-        sudo apt update
-        sudo apt install -y \
-        bc bison build-essential curl flex git kmod \
-        libssl-dev libelf-dev libncurses-dev \
-        python3 unzip zip cpio device-tree-compiler
+- name: Install Dependencies
+  run: |
+    sudo apt update
+    sudo apt install -y \
+    bc bison build-essential curl flex git kmod \
+    libssl-dev libelf-dev libncurses-dev \
+    python3 unzip zip cpio device-tree-compiler \
+    clang lld llvm
 
-    - name: Clone Proton Clang
-      run: |
-        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+- name: Clone Proton Clang
+  run: |
+    git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-    - name: Setup Environment
-      run: |
-        echo "ARCH=arm64" >> $GITHUB_ENV
-        echo "SUBARCH=arm64" >> $GITHUB_ENV
+- name: Setup Environment
+  run: |
+    echo "ARCH=arm64" >> $GITHUB_ENV
+    echo "SUBARCH=arm64" >> $GITHUB_ENV
 
-    - name: Build Kernel
-      run: |
-        export PATH=$PWD/clang/bin:$PATH
+- name: Build Kernel
+  run: |
+    export PATH=$PWD/clang/bin:$PATH
 
-        mkdir -p out
+    mkdir -p out
 
-        make O=out ARCH=arm64 holi-qgki_defconfig
-        make O=out ARCH=arm64 olddefconfig
+    make O=out ARCH=arm64 holi-qgki_defconfig
+    make O=out ARCH=arm64 olddefconfig
 
-        make -j$(nproc) \
-        O=out \
-        ARCH=arm64 \
-        LLVM=1 \
-        LLVM_IAS=1 \
-        CROSS_COMPILE=aarch64-linux-gnu-
+    make -j$(nproc) \
+    O=out \
+    ARCH=arm64 \
+    CC=clang \
+    LD=ld.lld \
+    LLVM=1 \
+    LLVM_IAS=1 \
+    AR=llvm-ar \
+    NM=llvm-nm \
+    OBJCOPY=llvm-objcopy \
+    OBJDUMP=llvm-objdump \
+    STRIP=llvm-strip
 
-    - name: Upload Kernel
-      uses: actions/upload-artifact@v4
-      with:
-        name: Kernel-Image
-        path: |
-          out/arch/arm64/boot/Image*
-          out/arch/arm64/boot/dts/**/*.dtb
+- name: Upload Kernel
+  uses: actions/upload-artifact@v4
+  with:
+    name: Kernel-Image
+    path: |
+      out/arch/arm64/boot/Image*
+      out/arch/arm64/boot/dts/**/*.dtb
