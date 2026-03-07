@@ -40,7 +40,7 @@ jobs:
 
         mkdir -p out
 
-        make O=out ARCH=arm64 holi-qgki_defconfig
+        make O=out ARCH=arm64 vendor/holi-qgki_defconfig
         make O=out ARCH=arm64 olddefconfig
 
         make -j$(nproc) \
