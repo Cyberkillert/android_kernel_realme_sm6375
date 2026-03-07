@@ -8,25 +8,34 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-    - name: Checkout Source
+
+    - name: Checkout source
       uses: actions/checkout@v4
 
-    - name: Install Dependencies
+    - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y \
-        bc bison build-essential flex git \
+        bc bison build-essential curl flex git \
         libssl-dev libelf-dev libncurses-dev \
-        clang lld llvm python3 unzip zip cpio
+        python3 unzip zip cpio \
+        clang lld llvm
 
     - name: Clone Proton Clang
       run: |
         git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
+    - name: Clone AnyKernel3
+      run: |
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+
+    - name: Setup environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+
     - name: Build Kernel
       run: |
-        export ARCH=arm64
-        export SUBARCH=arm64
         export PATH=$PWD/clang/bin:$PATH
 
         mkdir -p out
@@ -40,10 +49,20 @@ jobs:
         LLVM=1 \
         LLVM_IAS=1
 
-    - name: Upload Kernel
+    - name: Prepare AnyKernel zip
+      run: |
+        cp out/arch/arm64/boot/Image AnyKernel3/
+        cd AnyKernel3
+        zip -r9 Kernel-holi.zip *
+
+    - name: Upload Kernel Image
       uses: actions/upload-artifact@v4
       with:
-        name: Kernel
-        path: |
-          out/arch/arm64/boot/Image*
-          out/arch/arm64/boot/dts/**/*.dtb
+        name: Kernel-Image
+        path: out/arch/arm64/boot/Image
+
+    - name: Upload Flashable Kernel Zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: Flashable-Kernel
+        path: AnyKernel3/Kernel-holi.zip
