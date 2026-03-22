@@ -1,72 +1,80 @@
 name: Build Android Kernel
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-build:
-runs-on: ubuntu-22.04
+  build:
+    runs-on: ubuntu-22.04
 
-steps:
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
 
-- name: Checkout source
-  uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+          bc bison build-essential flex git curl \
+          libssl-dev libelf-dev libncurses-dev \
+          python3 unzip zip cpio
 
-- name: Install dependencies
-  run: |
-    sudo apt update
-    sudo apt install -y \
-    bc bison build-essential flex git curl \
-    libssl-dev libelf-dev libncurses-dev \
-    python3 unzip zip cpio
+      - name: Clone Proton Clang
+        run: |
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-- name: Clone Proton Clang
-  run: |
-    git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+      - name: Clone AnyKernel3
+        run: |
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-- name: Clone AnyKernel3
-  run: |
-    git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+      - name: Build Kernel
+        run: |
+          # Define paths and compiler variables
+          export PATH=$PWD/clang/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export KBUILD_COMPILER_STRING="$(clang --version | head -n 1)"
+          
+          # Compiler flags for LLVM/Clang
+          MAKE_FLAGS=(
+            ARCH=arm64
+            O=out
+            CC=clang
+            LLVM=1
+            LLVM_IAS=1
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          )
 
-- name: Build Kernel
-  run: |
-    export ARCH=arm64
-    export SUBARCH=arm64
-    export PATH=$PWD/clang/bin:$PATH
+          mkdir -p out
 
-    mkdir -p out
+          # Fix: Use the direct path for defconfig instead of copying it
+          # This avoids polluting the source tree
+          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-    echo "=== CHECKING DEFCONFIG ==="
-    find arch/arm64/configs -name "*holi*"
+          # Build kernel
+          make -j$(nproc) "${MAKE_FLAGS[@]}"
 
-    # 🔥 FIX: Copy vendor defconfig to root (guaranteed working)
-    cp arch/arm64/configs/vendor/holi-qgki_defconfig arch/arm64/configs/
+      - name: Prepare AnyKernel3 Zip
+        run: |
+          # Check if the Image actually exists before zipping
+          if [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image AnyKernel3/
+            cd AnyKernel3
+            zip -r9 Kernel-holi.zip *
+          else
+            echo "Error: Kernel Image not found!"
+            exit 1
+          fi
 
-    # Load defconfig
-    make O=out ARCH=arm64 holi-qgki_defconfig
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Image
+          path: out/arch/arm64/boot/Image
 
-    # Build kernel
-    make -j$(nproc) \
-    O=out \
-    ARCH=arm64 \
-    CC=clang \
-    LLVM=1 \
-    LLVM_IAS=1
-
-- name: Prepare AnyKernel3 Zip
-  run: |
-    cp out/arch/arm64/boot/Image AnyKernel3/ || exit 1
-    cd AnyKernel3
-    zip -r9 Kernel-holi.zip *
-
-- name: Upload Kernel Image
-  uses: actions/upload-artifact@v4
-  with:
-    name: Kernel-Image
-    path: out/arch/arm64/boot/Image
-
-- name: Upload Flashable Zip
-  uses: actions/upload-artifact@v4
-  with:
-    name: Flashable-Kernel
-    path: AnyKernel3/Kernel-holi.zip
+      - name: Upload Flashable Zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: Flashable-Kernel
+          path: AnyKernel3/Kernel-holi.zip
