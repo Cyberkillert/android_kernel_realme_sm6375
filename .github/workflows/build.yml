@@ -29,14 +29,9 @@ jobs:
 
       - name: Setup KernelSU-Next (Manual Integration)
         run: |
-          # 1. Clone the driver
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
-          
-          # 2. Prepare the drivers directory
           mkdir -p drivers/ksu
           cp -r KernelSU-Next/kernel/* drivers/ksu/
-          
-          # 3. Add to the drivers Makefile
           if ! grep -q "obj-y += ksu/" drivers/Makefile; then
             echo "obj-y += ksu/" >> drivers/Makefile
           fi
@@ -44,14 +39,15 @@ jobs:
 
       - name: Setup SUSFS
         run: |
-          # 1. Clone SUSFS patches from a reliable public mirror
-          git clone --depth=1 https://github.com/TheSorrow47/android_kernel_susfs susfs || git clone --depth=1 https://github.com/sidex15/android_kernel_susfs susfs
+          # Use a verified public mirror for SUSFS patches
+          git clone --depth=1 https://github.com/WildKernels/kernel_patches.git susfs_repo
           
-          # 2. Copy the SUSFS header and files to source
-          cp susfs/include/linux/susfs.h include/linux/
-          cp susfs/fs/susfs.c fs/
+          # Copy core SUSFS files to your source (using generic names for compatibility)
+          # Note: If filenames vary in the repo, check 'susfs_repo/SUSFS/' folder
+          find susfs_repo -name "susfs.h" -exec cp {} include/linux/ \;
+          find susfs_repo -name "susfs.c" -exec cp {} fs/ \;
           
-          # 3. Link SUSFS in the filesystem Makefile
+          # Link SUSFS in the filesystem Makefile
           if ! grep -q "susfs.o" fs/Makefile; then
             sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
           fi
@@ -59,16 +55,12 @@ jobs:
 
       - name: Build Kernel
         run: |
-          # Start build timer
           START=$(date +%s)
-          
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Custom version name
           CUSTOM_NAME="-KSU-Next-SUSFS-cyber"
-
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -82,49 +74,30 @@ jobs:
           )
 
           mkdir -p out
-
-          # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. DISABLE LTO (Link Time Optimization)
-          ./scripts/config --file out/.config -d LTO
-          ./scripts/config --file out/.config -d LTO_CLANG
-          ./scripts/config --file out/.config -d LTO_CLANG_THIN
-          ./scripts/config --file out/.config -d LTO_CLANG_FULL
-          ./scripts/config --file out/.config -e LTO_NONE
+          # DISABLE LTO for stability
+          ./scripts/config --file out/.config -d LTO -d LTO_CLANG -e LTO_NONE
           
-          # 3. Enable KernelSU & Kprobes
-          ./scripts/config --file out/.config -e KPROBES
-          ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
-          ./scripts/config --file out/.config -e OVERLAY_FS
-          ./scripts/config --file out/.config -e KERNELSU
-          
-          # 4. Enable SUSFS Configs
-          ./scripts/config --file out/.config -e SUSFS
-          ./scripts/config --file out/.config -e SUSFS_ROOT_HASH_NON_SECURE
-          ./scripts/config --file out/.config -e SUSFS_HIDE_KSU
-          ./scripts/config --file out/.config -e SUSFS_TRY_UMOUNT
+          # Enable KSU & SUSFS Configs
+          ./scripts/config --file out/.config -e KPROBES -e OVERLAY_FS -e KERNELSU
+          ./scripts/config --file out/.config -e SUSFS -e SUSFS_HIDE_KSU -e SUSFS_TRY_UMOUNT
 
-          # 5. Final Build
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
           
-          # End build timer
           END=$(date +%s)
-          DIFF=$(( $END - $START ))
-          echo "Build took $(( $DIFF / 60 )) minutes and $(( $DIFF % 60 )) seconds."
+          echo "Build took $(( ($END - $START) / 60 )) minutes."
 
       - name: Prepare AnyKernel3 Zip
         run: |
           DATE=$(date +%Y%m%d)
           ZIP_NAME="Kernel-cyber-KSU-SUSFS-${DATE}.zip"
-          
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
             zip -r9 "$ZIP_NAME" *
             echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           else
-            echo "Error: Image file not found!"
             exit 1
           fi
 
