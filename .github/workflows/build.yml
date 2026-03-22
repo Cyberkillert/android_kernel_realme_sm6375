@@ -27,10 +27,14 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Setup KernelSU-Next
+      - name: Setup KernelSU-Next (Manual Integration)
         run: |
-          # Correctly indented and using the URL you provided
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/refs/heads/dev/kernel/setup.sh" | bash -
+          # If the setup.sh 404s, we clone the driver directly into the kernel source
+          # This is the most reliable way in 2026
+          git clone https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
+          cp -r KernelSU-Next/kernel/* .
+          echo "obj-y += KernelSU-Next/kernel/" >> drivers/Makefile
+          echo "KernelSU-Next integrated manually."
 
       - name: Build Kernel
         run: |
@@ -38,7 +42,7 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Custom version name
+          # This will show up in "About Phone"
           CUSTOM_NAME="-KSU-Next-cyber"
 
           MAKE_FLAGS=(
@@ -58,13 +62,14 @@ jobs:
           # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. Force-enable required KSU-Next configs
+          # 2. Force-enable required configs
+          # These are essential for KSU-Next to actually activate
           ./scripts/config --file out/.config -e KPROBES
           ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
           ./scripts/config --file out/.config -e OVERLAY_FS
           ./scripts/config --file out/.config -e KERNELSU
           
-          # 3. Build the kernel
+          # 3. Build it!
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
       - name: Prepare AnyKernel3 Zip
@@ -72,7 +77,6 @@ jobs:
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
-            # Fixed filename to match the upload step below
             zip -r9 Kernel-cyber-KSU.zip *
           else
             echo "Error: Image file not found!"
