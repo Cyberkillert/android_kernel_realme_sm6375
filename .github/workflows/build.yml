@@ -83,4 +83,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Kernel-Sana-KSU
-          path: AnyKernel3/Kernel-Sana-KSU.zip
+          path: AnyKernel3/Kernel-cyber-KSU.zip
