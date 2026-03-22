@@ -27,12 +27,14 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-            - name: Build Kernel
+      - name: Build Kernel
         run: |
+          # Setup toolchain path
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
+          # Use an array for flags to keep things clean
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -41,25 +43,28 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            KBUILD_MODPOST_WARN=1 # <--- THIS IS THE MAGIC LINE
+            KBUILD_MODPOST_WARN=1
           )
 
           mkdir -p out
-          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
-          
-          # We also add it to the final build command
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
+          # 1. Load the defconfig
+          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
+
+          # 2. Build the kernel (Injecting mismatch bypass here)
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
       - name: Prepare AnyKernel3 Zip
         run: |
-          # Check if the Image actually exists before zipping
+          # Verify image existence
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
+            # Remove any existing zips before creating a new one
+            rm -f *.zip
             zip -r9 Kernel-holi.zip *
           else
-            echo "Error: Kernel Image not found!"
+            echo "FATAL: Kernel Image (vmlinux) failed to compile!"
             exit 1
           fi
 
@@ -74,3 +79,4 @@ jobs:
         with:
           name: Flashable-Kernel
           path: AnyKernel3/Kernel-holi.zip
+          
