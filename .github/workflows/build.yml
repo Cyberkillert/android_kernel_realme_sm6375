@@ -1,41 +1,16 @@
-name: Build Android Kernel (KSU-Next)
-
-on:
-  workflow_dispatch:
-
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
+      - name: Setup KernelSU-Next (Manual Integration)
         run: |
-          sudo apt update
-          sudo apt install -y \
-          bc bison build-essential flex git curl \
-          libssl-dev libelf-dev libncurses-dev \
-          python3 unzip zip cpio
-
-      - name: Clone Proton Clang
-        run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
-
-      - name: Clone AnyKernel3
-        run: |
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
-
-      - name: Setup KernelSU-Next (Manual)
-        run: |
-          # 2026 Stable Manual Integration:
-          # Clone the Next driver directly into your kernel folder
+          # 1. Clone the driver
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
           
-          # Link the driver into the kernel build system
-          echo "obj-y += KernelSU-Next/kernel/" >> drivers/Makefile
-          echo "KernelSU-Next integrated successfully."
+          # 2. Move the kernel driver into the drivers directory
+          mkdir -p drivers/KernelSU-Next
+          cp -r KernelSU-Next/kernel/* drivers/KernelSU-Next/
+          
+          # 3. Add it to the drivers Makefile correctly
+          echo "obj-y += KernelSU-Next/" >> drivers/Makefile
+          
+          echo "KernelSU-Next integrated into drivers/ successfully."
 
       - name: Build Kernel
         run: |
@@ -43,7 +18,7 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # This name shows up in About Phone
+          # Version string for "About Phone"
           CUSTOM_NAME="-KSU-Next-cyber"
 
           MAKE_FLAGS=(
@@ -64,34 +39,12 @@ jobs:
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
           # 2. Force-enable the required configs
+          # Note: We use the full path to scripts/config
           ./scripts/config --file out/.config -e KPROBES
           ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
           ./scripts/config --file out/.config -e OVERLAY_FS
           ./scripts/config --file out/.config -e KERNELSU
           
-          # 3. Build the kernel
+          # 3. Build it
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
-
-      - name: Prepare AnyKernel3 Zip
-        run: |
-          # Create a date variable (Format: YYYYMMDD)
-          DATE=$(date +%Y%m%d)
-          ZIP_NAME="Kernel-cyber-KSU-${DATE}.zip"
-          
-          if [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image AnyKernel3/
-            cd AnyKernel3
-            zip -r9 "$ZIP_NAME" *
-            # Export filename for the next step
-            echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
-          else
-            echo "Error: Image file not found!"
-            exit 1
-          fi
-
-      - name: Upload Flashable Zip
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-KSU-Next-Build
-          path: AnyKernel3/${{ env.FINAL_ZIP_NAME }}
           
