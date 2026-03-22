@@ -1,4 +1,4 @@
-name: Build Android Kernel (KSU-Next)
+name: Build Android Kernel (KSU-Next + SUSFS)
 
 on:
   workflow_dispatch:
@@ -40,50 +40,22 @@ jobs:
           if ! grep -q "obj-y += ksu/" drivers/Makefile; then
             echo "obj-y += ksu/" >> drivers/Makefile
           fi
-          
-          echo "KernelSU-Next integrated into drivers/ksu successfully."
+          echo "KernelSU-Next integrated successfully."
 
-                - name: Setup SUSFS
+      - name: Setup SUSFS
         run: |
-          # 1. Clone SUSFS patches and tool
+          # 1. Clone SUSFS patches
           git clone --depth=1 https://github.com/nameless-dev/android_kernel_susfs susfs
           
-          # 2. Copy the SUSFS header and files to your kernel source
+          # 2. Copy the SUSFS header and files
           cp susfs/include/linux/susfs.h include/linux/
           cp susfs/fs/susfs.c fs/
           
-          # 3. Apply the patches (Note: This depends on your kernel version, usually 5.10 for Holi)
-          # We manually link it if the patch fails, but usually, we add it to the Makefile
-          echo "obj-y += susfs.o" >> fs/Makefile
-          
-          # 4. Patch the necessary kernel files (hooks)
-          # Note: Manual patching is safer for vendor kernels to avoid 'patch failed' errors
-          sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
-          
+          # 3. Link SUSFS in the filesystem Makefile
+          if ! grep -q "susfs.o" fs/Makefile; then
+            sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
+          fi
           echo "SUSFS integrated successfully."
-
-      - name: Build Kernel
-        run: |
-          # ... (previous exports and CUSTOM_NAME)
-          
-          # 1. Load defconfig
-          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
-
-          # 2. Disable LTO (Keep this for stability!)
-          ./scripts/config --file out/.config -d LTO -e LTO_NONE
-          
-          # 3. Enable KernelSU & Kprobes
-          ./scripts/config --file out/.config -e KPROBES -e OVERLAY_FS -e KERNELSU
-          
-          # 4. ENABLE SUSFS CONFIGS
-          ./scripts/config --file out/.config -e SUSFS
-          ./scripts/config --file out/.config -e SUSFS_ROOT_HASH_NON_SECURE
-          ./scripts/config --file out/.config -e SUSFS_HIDE_KSU
-          ./scripts/config --file out/.config -e SUSFS_TRY_UMOUNT
-          
-          # 5. Build
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
-          
 
       - name: Build Kernel
         run: |
@@ -95,7 +67,7 @@ jobs:
           export SUBARCH=arm64
           
           # Custom version name
-          CUSTOM_NAME="-KSU-Next-cyber"
+          CUSTOM_NAME="-KSU-Next-SUSFS-cyber"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -121,13 +93,19 @@ jobs:
           ./scripts/config --file out/.config -d LTO_CLANG_FULL
           ./scripts/config --file out/.config -e LTO_NONE
           
-          # 3. Enable KernelSU Requirements
+          # 3. Enable KernelSU & Kprobes
           ./scripts/config --file out/.config -e KPROBES
           ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
           ./scripts/config --file out/.config -e OVERLAY_FS
           ./scripts/config --file out/.config -e KERNELSU
+          
+          # 4. Enable SUSFS Configs
+          ./scripts/config --file out/.config -e SUSFS
+          ./scripts/config --file out/.config -e SUSFS_ROOT_HASH_NON_SECURE
+          ./scripts/config --file out/.config -e SUSFS_HIDE_KSU
+          ./scripts/config --file out/.config -e SUSFS_TRY_UMOUNT
 
-          # 4. Final Build
+          # 5. Final Build
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
           
           # End build timer
@@ -137,9 +115,8 @@ jobs:
 
       - name: Prepare AnyKernel3 Zip
         run: |
-          # Create a date variable
           DATE=$(date +%Y%m%d)
-          ZIP_NAME="Kernel-cyber-KSU-${DATE}.zip"
+          ZIP_NAME="Kernel-cyber-KSU-SUSFS-${DATE}.zip"
           
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
