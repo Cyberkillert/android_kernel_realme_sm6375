@@ -27,15 +27,12 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel
+            - name: Build Kernel
         run: |
-          # Define paths and compiler variables
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
-          export KBUILD_COMPILER_STRING="$(clang --version | head -n 1)"
           
-          # Compiler flags for LLVM/Clang
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -44,16 +41,15 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            KBUILD_MODPOST_WARN=1 # <--- THIS IS THE MAGIC LINE
           )
 
           mkdir -p out
-
-          # Fix: Use the direct path for defconfig instead of copying it
-          # This avoids polluting the source tree
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
+          
+          # We also add it to the final build command
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
-          # Build kernel
-          make -j$(nproc) "${MAKE_FLAGS[@]}"
 
       - name: Prepare AnyKernel3 Zip
         run: |
