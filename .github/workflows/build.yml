@@ -10,8 +10,6 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          ref: ksu-next # Ensures it builds from this branch
 
       - name: Install dependencies
         run: |
@@ -29,10 +27,15 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Setup KernelSU-Next
+      - name: Setup KernelSU-Next (Manual)
         run: |
-          # This script automatically patches your kernel source to include KSU-Next
-          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/main/kernel/setup.sh" | bash -
+          # 2026 Stable Manual Integration:
+          # Clone the Next driver directly into your kernel folder
+          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
+          
+          # Link the driver into the kernel build system
+          echo "obj-y += KernelSU-Next/kernel/" >> drivers/Makefile
+          echo "KernelSU-Next integrated successfully."
 
       - name: Build Kernel
         run: |
@@ -40,6 +43,9 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           
+          # This name shows up in About Phone
+          CUSTOM_NAME="-KSU-Next-cyber"
+
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -49,36 +55,43 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             KBUILD_MODPOST_WARN=1
+            LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
 
-          # 1. Load the base defconfig
+          # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. Force-enable KSU and required dependencies in the .config file
-          # This is better than editing the defconfig file manually!
+          # 2. Force-enable the required configs
           ./scripts/config --file out/.config -e KPROBES
           ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
           ./scripts/config --file out/.config -e OVERLAY_FS
           ./scripts/config --file out/.config -e KERNELSU
           
-          # 3. Final build command
+          # 3. Build the kernel
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
       - name: Prepare AnyKernel3 Zip
         run: |
+          # Create a date variable (Format: YYYYMMDD)
+          DATE=$(date +%Y%m%d)
+          ZIP_NAME="Kernel-cyber-KSU-${DATE}.zip"
+          
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
-            zip -r9 Kernel-KSU-Next.zip *
+            zip -r9 "$ZIP_NAME" *
+            # Export filename for the next step
+            echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           else
-            echo "Build failed: Image not found."
+            echo "Error: Image file not found!"
             exit 1
           fi
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Flashable-KSU-Next
-          path: AnyKernel3/Kernel-KSU-Next.zip
+          name: Kernel-KSU-Next-Build
+          path: AnyKernel3/${{ env.FINAL_ZIP_NAME }}
+          
