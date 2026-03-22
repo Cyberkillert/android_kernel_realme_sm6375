@@ -3,22 +3,29 @@
           # 1. Clone the driver
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
           
-          # 2. Move the kernel driver into the drivers directory
-          mkdir -p drivers/KernelSU-Next
-          cp -r KernelSU-Next/kernel/* drivers/KernelSU-Next/
+          # 2. Prepare the drivers directory
+          # We move the entire kernel folder from the clone into drivers
+          mkdir -p drivers/ksu
+          cp -r KernelSU-Next/kernel/* drivers/ksu/
           
-          # 3. Add it to the drivers Makefile correctly
-          echo "obj-y += KernelSU-Next/" >> drivers/Makefile
+          # 3. Add to the drivers Makefile
+          # Using 'ksu/' is cleaner and avoids naming conflicts
+          if ! grep -q "obj-y += ksu/" drivers/Makefile; then
+            echo "obj-y += ksu/" >> drivers/Makefile
+          fi
           
-          echo "KernelSU-Next integrated into drivers/ successfully."
+          echo "KernelSU-Next integrated into drivers/ksu successfully."
 
       - name: Build Kernel
         run: |
+          # Start build timer
+          START=$(date +%s)
+          
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Version string for "About Phone"
+          # Custom version name
           CUSTOM_NAME="-KSU-Next-cyber"
 
           MAKE_FLAGS=(
@@ -38,13 +45,25 @@
           # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. Force-enable the required configs
-          # Note: We use the full path to scripts/config
+          # 2. DISABLE LTO (Link Time Optimization)
+          # This prevents many common 'Section Mismatch' and 'LD' errors
+          ./scripts/config --file out/.config -d LTO
+          ./scripts/config --file out/.config -d LTO_CLANG
+          ./scripts/config --file out/.config -d LTO_CLANG_THIN
+          ./scripts/config --file out/.config -d LTO_CLANG_FULL
+          ./scripts/config --file out/.config -e LTO_NONE
+          
+          # 3. Enable KernelSU Requirements
           ./scripts/config --file out/.config -e KPROBES
           ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
           ./scripts/config --file out/.config -e OVERLAY_FS
           ./scripts/config --file out/.config -e KERNELSU
-          
-          # 3. Build it
+
+          # 4. Final Build
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          
+          # End build timer
+          END=$(date +%s)
+          DIFF=$(( $END - $START ))
+          echo "Build took $(( $DIFF / 60 )) minutes and $(( $DIFF % 60 )) seconds."
           
