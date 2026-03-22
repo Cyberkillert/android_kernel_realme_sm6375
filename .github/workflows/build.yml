@@ -1,56 +1,68 @@
 name: Build Android Kernel
 
 on:
-workflow_dispatch:
+  workflow_dispatch:
 
 jobs:
-build:
-runs-on: ubuntu-22.04
+  build:
+    runs-on: ubuntu-22.04
 
-steps:
+    steps:
 
-- name: Checkout source
-  uses: actions/checkout@v4
+    - name: Checkout source
+      uses: actions/checkout@v4
 
-- name: Install dependencies
-  run: |
-    sudo apt update
-    sudo apt install -y bc bison build-essential flex git curl \
-    libssl-dev libelf-dev libncurses-dev python3 unzip zip cpio
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+        bc bison build-essential curl flex git \
+        libssl-dev libelf-dev libncurses-dev \
+        python3 unzip zip cpio \
+        clang lld llvm
 
-- name: Clone Proton Clang
-  run: git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+    - name: Clone Proton Clang
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-- name: Clone AnyKernel3
-  run: git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+    - name: Clone AnyKernel3
+      run: |
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-- name: Build Kernel
-  run: |
-    export ARCH=arm64
-    export SUBARCH=arm64
-    export PATH=$PWD/clang/bin:$PATH
+    - name: Setup environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
 
-    mkdir -p out
+    - name: Build Kernel
+      run: |
+        export PATH=$PWD/clang/bin:$PATH
 
-    # Confirm file exists
-    ls arch/arm64/configs/vendor/
+        mkdir -p out
 
-    # Load defconfig (correct)
-    make O=out ARCH=arm64 vendor/holi-qgki_defconfig
+        make O=out ARCH=arm64 arch/arm64/configs/vendor/holi-qgki_defconfig
+        make O=out ARCH=arm64 olddefconfig
 
-    # Build
-    make -j$(nproc) O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1
+        make -j$(nproc) \
+        O=out \
+        ARCH=arm64 \
+        LLVM=1 \
+        LLVM_IAS=1
 
-- name: Make Flashable Zip
-  run: |
-    cp out/arch/arm64/boot/Image AnyKernel3/
-    cd AnyKernel3
-    zip -r9 Kernel-holi.zip *
+    - name: Prepare AnyKernel zip
+      run: |
+        cp out/arch/arm64/boot/Image AnyKernel3/
+        cd AnyKernel3
+        zip -r9 Kernel-holi.zip *
 
-- name: Upload Outputs
-  uses: actions/upload-artifact@v4
-  with:
-    name: Kernel-Build
-    path: |
-      out/arch/arm64/boot/Image
-      AnyKernel3/Kernel-holi.zip
+    - name: Upload Kernel Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Image
+        path: out/arch/arm64/boot/Image
+
+    - name: Upload Flashable Kernel Zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: Flashable-Kernel
+        path: AnyKernel3/Kernel-holi.zip
