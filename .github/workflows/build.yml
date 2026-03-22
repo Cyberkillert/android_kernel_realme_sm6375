@@ -43,6 +43,48 @@ jobs:
           
           echo "KernelSU-Next integrated into drivers/ksu successfully."
 
+                - name: Setup SUSFS
+        run: |
+          # 1. Clone SUSFS patches and tool
+          git clone --depth=1 https://github.com/nameless-dev/android_kernel_susfs susfs
+          
+          # 2. Copy the SUSFS header and files to your kernel source
+          cp susfs/include/linux/susfs.h include/linux/
+          cp susfs/fs/susfs.c fs/
+          
+          # 3. Apply the patches (Note: This depends on your kernel version, usually 5.10 for Holi)
+          # We manually link it if the patch fails, but usually, we add it to the Makefile
+          echo "obj-y += susfs.o" >> fs/Makefile
+          
+          # 4. Patch the necessary kernel files (hooks)
+          # Note: Manual patching is safer for vendor kernels to avoid 'patch failed' errors
+          sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
+          
+          echo "SUSFS integrated successfully."
+
+      - name: Build Kernel
+        run: |
+          # ... (previous exports and CUSTOM_NAME)
+          
+          # 1. Load defconfig
+          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
+
+          # 2. Disable LTO (Keep this for stability!)
+          ./scripts/config --file out/.config -d LTO -e LTO_NONE
+          
+          # 3. Enable KernelSU & Kprobes
+          ./scripts/config --file out/.config -e KPROBES -e OVERLAY_FS -e KERNELSU
+          
+          # 4. ENABLE SUSFS CONFIGS
+          ./scripts/config --file out/.config -e SUSFS
+          ./scripts/config --file out/.config -e SUSFS_ROOT_HASH_NON_SECURE
+          ./scripts/config --file out/.config -e SUSFS_HIDE_KSU
+          ./scripts/config --file out/.config -e SUSFS_TRY_UMOUNT
+          
+          # 5. Build
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          
+
       - name: Build Kernel
         run: |
           # Start build timer
