@@ -42,13 +42,12 @@ jobs:
           fi
           echo "KernelSU-Next integrated successfully."
 
-            - name: Setup SUSFS
+      - name: Setup SUSFS
         run: |
           # 1. Clone SUSFS patches from a reliable public mirror
-          # This repo is currently active and public
           git clone --depth=1 https://github.com/TheSorrow47/android_kernel_susfs susfs || git clone --depth=1 https://github.com/sidex15/android_kernel_susfs susfs
           
-          # 2. Copy the SUSFS header and files
+          # 2. Copy the SUSFS header and files to source
           cp susfs/include/linux/susfs.h include/linux/
           cp susfs/fs/susfs.c fs/
           
@@ -57,7 +56,6 @@ jobs:
             sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
           fi
           echo "SUSFS integrated successfully."
-
 
       - name: Build Kernel
         run: |
