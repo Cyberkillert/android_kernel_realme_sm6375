@@ -1,4 +1,4 @@
-name: Build Android Kernel
+name: Build Android Kernel (KSU-Next)
 
 on:
   workflow_dispatch:
@@ -10,6 +10,8 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+        with:
+          ref: ksu-next # Ensures it builds from this branch
 
       - name: Install dependencies
         run: |
@@ -27,14 +29,17 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
+      - name: Setup KernelSU-Next
+        run: |
+          # This script automatically patches your kernel source to include KSU-Next
+          curl -LSs "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/main/kernel/setup.sh" | bash -
+
       - name: Build Kernel
         run: |
-          # Setup toolchain path
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Use an array for flags to keep things clean
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -48,35 +53,32 @@ jobs:
 
           mkdir -p out
 
-          # 1. Load the defconfig
+          # 1. Load the base defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. Build the kernel (Injecting mismatch bypass here)
+          # 2. Force-enable KSU and required dependencies in the .config file
+          # This is better than editing the defconfig file manually!
+          ./scripts/config --file out/.config -e KPROBES
+          ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
+          ./scripts/config --file out/.config -e OVERLAY_FS
+          ./scripts/config --file out/.config -e KERNELSU
+          
+          # 3. Final build command
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
       - name: Prepare AnyKernel3 Zip
         run: |
-          # Verify image existence
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
-            # Remove any existing zips before creating a new one
-            rm -f *.zip
-            zip -r9 Kernel-holi.zip *
+            zip -r9 Kernel-KSU-Next.zip *
           else
-            echo "FATAL: Kernel Image (vmlinux) failed to compile!"
+            echo "Build failed: Image not found."
             exit 1
           fi
-
-      - name: Upload Kernel Image
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-Image
-          path: out/arch/arm64/boot/Image
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Flashable-Kernel
-          path: AnyKernel3/Kernel-holi.zip
-          
+          name: Flashable-KSU-Next
+          path: AnyKernel3/Kernel-KSU-Next.zip
