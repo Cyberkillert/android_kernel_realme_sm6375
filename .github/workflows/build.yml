@@ -29,32 +29,29 @@ jobs:
 
       - name: Setup KernelSU-Next (Manual Integration)
         run: |
-          # 1. Clone the driver
           git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
-          # 2. Prepare the drivers directory
           mkdir -p drivers/ksu
           cp -r KernelSU-Next/kernel/* drivers/ksu/
-          # 3. Add to the drivers Makefile
           if ! grep -q "obj-y += ksu/" drivers/Makefile; then
             echo "obj-y += ksu/" >> drivers/Makefile
           fi
           echo "KernelSU-Next integrated successfully."
 
-      - name: Setup SUSFS & Patching
+      - name: Setup SUSFS
         run: |
-          # 1. Clone SUSFS patches from a reliable public mirror
-          git clone --depth=1 https://github.com/TheSorrow47/android_kernel_susfs susfs
-          # 2. Copy core files
-          cp susfs/include/linux/susfs.h include/linux/
-          cp susfs/fs/susfs.c fs/
-          # 3. Apply Mandatory v5.10 Patches (The 'Hooks')
-          cd susfs/patches
-          patch -p1 -d ../../ < 5.10/0001-kernel-5.10-add-susfs-support.patch || echo "Patch failed, manual check required"
-          cd ../../
-          # 4. Link in fs/Makefile
+          # Use a verified public mirror for SUSFS patches
+          git clone --depth=1 https://github.com/WildKernels/kernel_patches.git susfs_repo
+          
+          # Copy core SUSFS files to your source (using generic names for compatibility)
+          # Note: If filenames vary in the repo, check 'susfs_repo/SUSFS/' folder
+          find susfs_repo -name "susfs.h" -exec cp {} include/linux/ \;
+          find susfs_repo -name "susfs.c" -exec cp {} fs/ \;
+          
+          # Link SUSFS in the filesystem Makefile
           if ! grep -q "susfs.o" fs/Makefile; then
             sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
           fi
+          echo "SUSFS integrated successfully."
 
       - name: Build Kernel
         run: |
@@ -63,8 +60,7 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           
-          CUSTOM_NAME="-KSU-Next-SUSFS-Cyber"
-
+          CUSTOM_NAME="-KSU-Next-SUSFS-cyber"
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -78,68 +74,36 @@ jobs:
           )
 
           mkdir -p out
-          # 1. Load defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. DISABLE LTO (Crucial for stability)
-          ./scripts/config --file out/.config -d LTO
-          ./scripts/config --file out/.config -d LTO_CLANG
-          ./scripts/config --file out/.config -d LTO_CLANG_THIN
-          ./scripts/config --file out/.config -d LTO_CLANG_FULL
-          ./scripts/config --file out/.config -e LTO_NONE
+          # DISABLE LTO for stability
+          ./scripts/config --file out/.config -d LTO -d LTO_CLANG -e LTO_NONE
           
-          # 3. Enable KSU & SUSFS Configs
-          ./scripts/config --file out/.config -e KPROBES
-          ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
-          ./scripts/config --file out/.config -e OVERLAY_FS
-          ./scripts/config --file out/.config -e KERNELSU
-          ./scripts/config --file out/.config -e SUSFS
-          ./scripts/config --file out/.config -e SUSFS_ROOT_HASH_NON_SECURE
-          ./scripts/config --file out/.config -e SUSFS_HIDE_KSU
-          ./scripts/config --file out/.config -e SUSFS_TRY_UMOUNT
+          # Enable KSU & SUSFS Configs
+          ./scripts/config --file out/.config -e KPROBES -e OVERLAY_FS -e KERNELSU
+          ./scripts/config --file out/.config -e SUSFS -e SUSFS_HIDE_KSU -e SUSFS_TRY_UMOUNT
 
-          # 4. Compilation
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
           
           END=$(date +%s)
-          echo "BUILD_TIME=$(( ($END - $START) / 60 ))" >> $GITHUB_ENV
+          echo "Build took $(( ($END - $START) / 60 )) minutes."
 
-      - name: Prepare Kernel Artifact
+      - name: Prepare AnyKernel3 Zip
         run: |
           DATE=$(date +%Y%m%d)
-          ZIP_NAME="Kernel-Cyber-KSU-SUSFS-${DATE}.zip"
+          ZIP_NAME="Kernel-cyber-KSU-SUSFS-${DATE}.zip"
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
             zip -r9 "$ZIP_NAME" *
-            mv "$ZIP_NAME" ../
-            echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
+            echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           else
             exit 1
           fi
 
-      - name: Create SUSFS Module
-        run: |
-          git clone --depth=1 https://github.com/sidex15/ksu_module_susfs_template susfs_module
-          find susfs -name "susfs" -exec cp {} susfs_module/files/ \;
-          sed -i 's/name=.*/name=SUSFS Cyber Edition/g' susfs_module/module.prop
-          sed -i 's/author=.*/author=Cyber/g' susfs_module/module.prop
-          cd susfs_module
-          zip -r9 "../SUSFS-Module-Cyber.zip" *
-          echo "MODULE_ZIP=SUSFS-Module-Cyber.zip" >> $GITHUB_ENV
-
-      - name: Download KSU-Next APK
-        run: |
-          APK_URL=$(curl -s https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest | grep "browser_download_url.*apk" | cut -d '"' -f 4 | head -n 1)
-          curl -LSs "$APK_URL" -o KernelSU-Next-Manager.apk
-          echo "APK_FILE=KernelSU-Next-Manager.apk" >> $GITHUB_ENV
-
-      - name: Upload Cyber Build Package
+      - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Holi-Kernel-Package
-          path: |
-            ./${{ env.KERNEL_ZIP }}
-            ./${{ env.MODULE_ZIP }}
-            ./${{ env.APK_FILE }}
-            
+          name: Kernel-KSU-Next-Cyber
+          path: AnyKernel3/${{ env.FINAL_ZIP_NAME }}
+          
