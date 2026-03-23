@@ -1,4 +1,4 @@
-name: Build Android Kernel (KSU-Next + SUSFS)
+name: Build Android Kernel
 
 on:
   workflow_dispatch:
@@ -27,41 +27,14 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Setup KernelSU-Next (Manual Integration)
-        run: |
-          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
-          mkdir -p drivers/ksu
-          cp -r KernelSU-Next/kernel/* drivers/ksu/
-          if ! grep -q "obj-y += ksu/" drivers/Makefile; then
-            echo "obj-y += ksu/" >> drivers/Makefile
-          fi
-          echo "KernelSU-Next integrated successfully."
-
-            - name: Setup SUSFS
-        run: |
-          # 1. Clone SUSFS patches from a reliable public mirror (GitLab fallback)
-          git clone --depth=1 https://gitlab.com/TheSorrow47/android_kernel_susfs.git susfs || git clone --depth=1 https://github.com/sidex15/android_kernel_susfs.git susfs
-          
-          # 2. Copy core SUSFS files to your source
-          cp susfs/include/linux/susfs.h include/linux/
-          cp susfs/fs/susfs.c fs/
-          
-          # 3. Link SUSFS in the filesystem Makefile
-          if ! grep -q "susfs.o" fs/Makefile; then
-            sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
-          fi
-          echo "SUSFS integrated successfully."
-
       - name: Build Kernel
         run: |
-          START=$(date +%s)
+          # Setup toolchain path
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Internal kernel name
-          CUSTOM_NAME="-KSU-Next-SUSFS-Cyber"
-          
+          # Use an array for flags to keep things clean
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -71,46 +44,39 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             KBUILD_MODPOST_WARN=1
-            LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
+
+          # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # DISABLE LTO for stability
-          ./scripts/config --file out/.config -d LTO -d LTO_CLANG -e LTO_NONE
-          
-          # Enable KSU & SUSFS Configs
-          ./scripts/config --file out/.config -e KPROBES -e OVERLAY_FS -e KERNELSU
-          ./scripts/config --file out/.config -e SUSFS -e SUSFS_HIDE_KSU -e SUSFS_TRY_UMOUNT
-
+          # 2. Build the kernel (Injecting mismatch bypass here)
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
-          
-          END=$(date +%s)
-          echo "Build took $(( ($END - $START) / 60 )) minutes."
 
       - name: Prepare AnyKernel3 Zip
         run: |
-          DATE=$(date +%Y%m%d)
-          # Filename using Cyber
-          ZIP_NAME="Kernel-Cyber-KSU-SUSFS-${DATE}.zip"
-          
+          # Verify image existence
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
-            zip -r9 "$ZIP_NAME" *
-            # Move zip to root to avoid nested folders in artifact
-            mv "$ZIP_NAME" ../
-            echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+            # Remove any existing zips before creating a new one
+            rm -f *.zip
+            zip -r9 Kernel-holi.zip *
           else
-            echo "Error: Image file not found!"
+            echo "FATAL: Kernel Image (vmlinux) failed to compile!"
             exit 1
           fi
+
+      - name: Upload Kernel Image
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Image
+          path: out/arch/arm64/boot/Image
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          # Setting the artifact name to the filename avoids the extra zip layer
-          name: ${{ env.FINAL_ZIP_NAME }}
-          path: ./${{ env.FINAL_ZIP_NAME }}
+          name: Flashable-Kernel
+          path: AnyKernel3/Kernel-holi.zip
           
