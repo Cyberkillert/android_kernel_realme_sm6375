@@ -1,4 +1,4 @@
-name: Build Android Kernel
+name: Build Android Kernel (KSU-Next + SUSFS)
 
 on:
   workflow_dispatch:
@@ -27,14 +27,51 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
+      - name: Setup KernelSU-Next (Manual Integration)
+        run: |
+          # 1. Clone the driver
+          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
+          # 2. Prepare the drivers directory
+          mkdir -p drivers/ksu
+          cp -r KernelSU-Next/kernel/* drivers/ksu/
+          # 3. Add to the drivers Makefile
+          if ! grep -q "obj-y += ksu/" drivers/Makefile; then
+            echo "obj-y += ksu/" >> drivers/Makefile
+          fi
+          echo "KernelSU-Next integrated successfully."
+
+      - name: Setup SUSFS & Patching
+        run: |
+          # 1. Clone SUSFS patches from a verified public mirror
+          # We use a reliable mirror that doesn't require login
+          git clone --depth=1 https://gitlab.com/TheSorrow47/android_kernel_susfs.git susfs || git clone --depth=1 https://github.com/sidex15/android_kernel_susfs.git susfs
+          
+          # 2. Copy core files
+          cp susfs/include/linux/susfs.h include/linux/
+          cp susfs/fs/susfs.c fs/
+          
+          # 3. Apply Mandatory v5.10 Patches (The 'Hooks')
+          cd susfs/patches
+          # Apply the 5.10 generic patch to the kernel root
+          patch -p1 -d ../../ < 5.10/0001-kernel-5.10-add-susfs-support.patch || echo "Patch failed, manual check required"
+          cd ../../
+          
+          # 4. Link in fs/Makefile
+          if ! grep -q "susfs.o" fs/Makefile; then
+            sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
+          fi
+          echo "SUSFS integrated successfully."
+
       - name: Build Kernel
         run: |
-          # Setup toolchain path
+          START=$(date +%s)
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Use an array for flags to keep things clean
+          # Set local version to Cyber
+          CUSTOM_NAME="-KSU-Next-SUSFS-Cyber"
+
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -44,39 +81,77 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             KBUILD_MODPOST_WARN=1
+            LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
-
-          # 1. Load the defconfig
+          # 1. Load defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. Build the kernel (Injecting mismatch bypass here)
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          # 2. DISABLE LTO (Link Time Optimization) for stability
+          ./scripts/config --file out/.config -d LTO
+          ./scripts/config --file out/.config -d LTO_CLANG
+          ./scripts/config --file out/.config -d LTO_CLANG_THIN
+          ./scripts/config --file out/.config -d LTO_CLANG_FULL
+          ./scripts/config --file out/.config -e LTO_NONE
+          
+          # 3. Enable KSU & SUSFS Configs
+          ./scripts/config --file out/.config -e KPROBES
+          ./scripts/config --file out/.config -e KPROBES_ON_FTRACE
+          ./scripts/config --file out/.config -e OVERLAY_FS
+          ./scripts/config --file out/.config -e KERNELSU
+          ./scripts/config --file out/.config -e SUSFS
+          ./scripts/config --file out/.config -e SUSFS_ROOT_HASH_NON_SECURE
+          ./scripts/config --file out/.config -e SUSFS_HIDE_KSU
+          ./scripts/config --file out/.config -e SUSFS_TRY_UMOUNT
 
-      - name: Prepare AnyKernel3 Zip
+          # 4. Build the kernel
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          
+          END=$(date +%s)
+          echo "BUILD_TIME=$(( ($END - $START) / 60 ))" >> $GITHUB_ENV
+
+      - name: Prepare Kernel Artifact
         run: |
-          # Verify image existence
+          DATE=$(date +%Y%m%d)
+          ZIP_NAME="Kernel-Cyber-KSU-SUSFS-${DATE}.zip"
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
-            # Remove any existing zips before creating a new one
-            rm -f *.zip
-            zip -r9 Kernel-holi.zip *
+            zip -r9 "$ZIP_NAME" *
+            mv "$ZIP_NAME" ../
+            echo "KERNEL_ZIP=$ZIP_NAME" >> $GITHUB_ENV
           else
-            echo "FATAL: Kernel Image (vmlinux) failed to compile!"
+            echo "Error: Image file not found!"
             exit 1
           fi
 
-      - name: Upload Kernel Image
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-Image
-          path: out/arch/arm64/boot/Image
+      - name: Create SUSFS Module
+        run: |
+          # 1. Clone Module template
+          git clone --depth=1 https://github.com/sidex15/ksu_module_susfs_template susfs_module
+          # 2. Add susfs binary tool from cloned source
+          find susfs -name "susfs" -exec cp {} susfs_module/files/ \;
+          # 3. Customize Module info for Cyber
+          sed -i 's/name=.*/name=SUSFS Cyber Edition/g' susfs_module/module.prop
+          sed -i 's/author=.*/author=Cyber/g' susfs_module/module.prop
+          # 4. Zip it
+          cd susfs_module
+          zip -r9 "../SUSFS-Module-Cyber.zip" *
+          echo "MODULE_ZIP=SUSFS-Module-Cyber.zip" >> $GITHUB_ENV
 
-      - name: Upload Flashable Zip
+      - name: Download KSU-Next APK
+        run: |
+          APK_URL=$(curl -s https://api.github.com/repos/KernelSU-Next/KernelSU-Next/releases/latest | grep "browser_download_url.*apk" | cut -d '"' -f 4 | head -n 1)
+          curl -LSs "$APK_URL" -o KernelSU-Next-Manager.apk
+          echo "APK_FILE=KernelSU-Next-Manager.apk" >> $GITHUB_ENV
+
+      - name: Upload Cyber Build Package
         uses: actions/upload-artifact@v4
         with:
-          name: Flashable-Kernel
-          path: AnyKernel3/Kernel-holi.zip
-          
+          name: Cyber-Holi-Kernel-Package
+          path: |
+            ./${{ env.KERNEL_ZIP }}
+            ./${{ env.MODULE_ZIP }}
+            ./${{ env.APK_FILE }}
+            
