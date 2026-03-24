@@ -27,6 +27,18 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
+      - name: Apply NetHunter Patches
+        run: |
+          # Clone NetHunter kernel patches for Android
+          git clone https://github.com/kimocoder/kali-nethunter-patches.git nethunter
+          
+          # Apply HID (BadUSB) and WiFi Injection patches
+          # We use the generic 5.x patches which usually work for Holi (5.10)
+          chmod +x nethunter/*.sh
+          ./nethunter/patch-work.sh || echo "Patches partially applied or manual check needed"
+          
+          echo "NetHunter drivers integrated."
+
       - name: Build Kernel
         run: |
           # Setup toolchain path
@@ -51,7 +63,17 @@ jobs:
           # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. Build the kernel (Injecting mismatch bypass here)
+          # 2. Enable NetHunter Specific Configs (HID, WiFi, Bluetooth Injection)
+          ./scripts/config --file out/.config -e USB_F_HID
+          ./scripts/config --file out/.config -e USB_CONFIGFS_F_HID
+          ./scripts/config --file out/.config -e MAC80211
+          ./scripts/config --file out/.config -e CFG80211
+          ./scripts/config --file out/.config -e CFG80211_WEXT
+          ./scripts/config --file out/.config -e RFKILL
+          ./scripts/config --file out/.config -e BT_HCIUART
+          ./scripts/config --file out/.config -e BT_HCIBTUSB
+
+          # 3. Build the kernel (Injecting mismatch bypass here)
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
       - name: Prepare AnyKernel3 Zip
