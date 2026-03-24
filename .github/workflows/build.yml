@@ -1,4 +1,4 @@
-name: Build Android Kernel
+name: Build Android Kernel (Cyber-Gaming)
 
 on:
   workflow_dispatch:
@@ -29,12 +29,13 @@ jobs:
 
       - name: Build Kernel
         run: |
-          # Setup toolchain path
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Use an array for flags to keep things clean
+          # Branding for the Gaming version
+          CUSTOM_NAME="-Cyber-Gaming-MAX"
+
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -44,6 +45,7 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             KBUILD_MODPOST_WARN=1
+            LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
@@ -51,32 +53,53 @@ jobs:
           # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. Build the kernel (Injecting mismatch bypass here)
+          # --- GAMING & PERFORMANCE TWEAKS ---
+          
+          # Enable Performance Governor by default
+          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
+          ./scripts/config --file out/.config -e CPU_FREQ_DEFAULT_GOV_PERFORMANCE
+
+          # Enable BBR TCP Congestion Control (Lower Ping for Online Gaming)
+          ./scripts/config --file out/.config -e TCP_CONG_BBR
+          ./scripts/config --file out/.config -d DEFAULT_TCP_CONG_CUBIC
+          ./scripts/config --file out/.config -e DEFAULT_TCP_CONG_BBR
+
+          # Optimize for Low Latency (Tick rate)
+          ./scripts/config --file out/.config -e HZ_1000
+          ./scripts/config --file out/.config -d HZ_300
+
+          # Disable Debugging/Logging (Reduces CPU overhead for more FPS)
+          ./scripts/config --file out/.config -d SLUB_DEBUG
+          ./scripts/config --file out/.config -d SCHED_DEBUG
+          ./scripts/config --file out/.config -d DEBUG_MISC
+
+          # Enable Graphics/GPU Performance boost
+          ./scripts/config --file out/.config -e MSM_ADRENO_DEFAULT_GOV_PERFORMANCE
+          
+          # --- END TWEAKS ---
+
+          # 3. Build the kernel
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
       - name: Prepare AnyKernel3 Zip
         run: |
-          # Verify image existence
+          DATE=$(date +%Y%m%d)
+          ZIP_NAME="Kernel-Cyber-Gaming-Holi-${DATE}.zip"
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
             cd AnyKernel3
-            # Remove any existing zips before creating a new one
-            rm -f *.zip
-            zip -r9 Kernel-holi.zip *
+            zip -r9 "$ZIP_NAME" *
+            mv "$ZIP_NAME" ../
+            echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           else
-            echo "FATAL: Kernel Image (vmlinux) failed to compile!"
+            echo "FATAL: Build failed!"
             exit 1
           fi
-
-      - name: Upload Kernel Image
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-Image
-          path: out/arch/arm64/boot/Image
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Flashable-Kernel
-          path: AnyKernel3/Kernel-holi.zip
+          name: ${{ env.FINAL_ZIP_NAME }}
+          path: ./${{ env.FINAL_ZIP_NAME }}
           
