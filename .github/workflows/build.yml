@@ -34,7 +34,7 @@ jobs:
           export SUBARCH=arm64
           
           # Branding for the Gaming version
-          CUSTOM_NAME="-Cyber-Gaming-MAX"
+          CUSTOM_NAME="-Cluster-Gaming-MAX"
 
           MAKE_FLAGS=(
             ARCH=arm64
