@@ -50,6 +50,19 @@ jobs:
 
           # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
+          # --- FIX FAST CHARGING (OPlus/Realme Handshake) ---
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHARGER_MTK
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_SHORT_HW_CHECK
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_SMART_CHARGER
+          
+          # Enable Power Supply Class (Needed for OS to see Fast Charge)
+          ./scripts/config --file out/.config -e CONFIG_POWER_SUPPLY
+          ./scripts/config --file out/.config -e CONFIG_QPNP_SMB5
+          ./scripts/config --file out/.config -e CONFIG_SMB1390_CHARGE_PUMP
+                    # Raise the thermal limit for charging (Caution: Phone will get hot!)
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG_TATT_SUPPORT
+          ./scripts/config --file out/.config -d CONFIG_OPLUS_CHG_LITE
 
           # 2. Build the kernel (Injecting mismatch bypass here)
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
@@ -79,4 +92,5 @@ jobs:
         with:
           name: Flashable-Kernel
           path: AnyKernel3/Kernel-holi.zip
+
           
