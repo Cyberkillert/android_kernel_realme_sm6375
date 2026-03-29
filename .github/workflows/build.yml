@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Gaming-DLKM)
+name: Build Android Kernel (Cyber-Gaming-5.4)
 
 on:
   workflow_dispatch:
@@ -27,13 +27,16 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel and Modules
+      - name: Build Kernel 5.4
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Use an array for flags
+          # MATCHING YOUR PHOTO: Version 5.4
+          # We keep the name clean to avoid module rejection
+          CUSTOM_NAME="-qgki-Cyber-Gaming"
+
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -43,72 +46,52 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             KBUILD_MODPOST_WARN=1
+            LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
-
-          # 1. Load the defconfig
+          # Using the 5.4 defconfig path
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- DLKM & HARDWARE MODULE FIXES ---
+          # --- MODULE COMPATIBILITY ---
           ./scripts/config --file out/.config -e MODULES
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -d MODULE_SIG
-          ./scripts/config --file out/.config -d MODULE_SIG_ALL
-          ./scripts/config --file out/.config -d MODULE_SIG_FORCE
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
-
-          # --- FAST CHARGING FIX (Realme/OPlus) ---
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHARGER_MTK
-          ./scripts/config --file out/.config -e CONFIG_POWER_SUPPLY
-          ./scripts/config --file out/.config -e CONFIG_QPNP_SMB5
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG_TATT_SUPPORT
-          ./scripts/config --file out/.config -d CONFIG_OPLUS_CHG_LITE
           
-          # --- MAX PERFORMANCE & GAMING TWEAKS ---
+          # --- PERFORMANCE & CHARGING ---
           ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
-          ./scripts/config --file out/.config -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
-          ./scripts/config --file out/.config -e CPU_FREQ_DEFAULT_GOV_PERFORMANCE
           ./scripts/config --file out/.config -e HZ_1000
-          ./scripts/config --file out/.config -d HZ_300
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
 
-          # Sync changes
           make "${MAKE_FLAGS[@]}" olddefconfig
+          # Build Image + Modules (.ko)
+          make -j$(nproc) "${MAKE_FLAGS[@]}" all
 
-          # 2. Build everything (Image + all .ko modules)
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
-
-      - name: Prepare AnyKernel3 Zip
+      - name: Prepare AnyKernel3 (A/B + DLKM)
         run: |
-          if [ -f out/arch/arm64/boot/Image ]; then
-            # 1. Copy Kernel
-            cp out/arch/arm64/boot/Image AnyKernel3/
-            
-            # 2. Collect and Strip Modules for DLKM
-            # We put them in vendor_dlkm folder so AnyKernel3 knows where to flash them
-            mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
-            find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
-            
-            # Strip debug symbols to keep the zip size small
-            # (Uses the cross-compiler strip tool)
-            # aarch64-linux-gnu-strip --strip-debug AnyKernel3/modules/vendor_dlkm/lib/modules/*.ko
-            
-            # 3. Enable module support in AnyKernel3 script
-            sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
-            
-            # 4. Zip everything
-            cd AnyKernel3
-            rm -f *.zip
-            zip -r9 ../Kernel-Cyberkillert-Holi-DLKM.zip *
-          else
-            echo "FATAL: Build failed!"
-            exit 1
-          fi
+          # 1. Update script for A/B Slot + Qualcomm Path
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
+
+          # 2. Copy the 5.4 Image
+          cp out/arch/arm64/boot/Image AnyKernel3/
+          
+          # 3. Collect 5.4 Modules
+          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
+          
+          # 4. Strip Symbols (Very important for 5.4 modules)
+          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
+
+          cd AnyKernel3
+          zip -r9 ../Cyber-5.4-Holi.zip *
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Gaming-DLKM-Package
-          path: ./Kernel-Cyberkillert-Holi-DLKM.zip
+          name: Cyber-Kernel-5.4-Final
+          path: ./Cyber-5.4-Holi.zip
           
