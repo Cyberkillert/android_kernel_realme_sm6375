@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Gaming-5.4)
+name: Build Android Kernel (Skip-Modules-Mode)
 
 on:
   workflow_dispatch:
@@ -27,15 +27,15 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel 5.4
+      - name: Build Kernel Image Only
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # MATCHING YOUR PHOTO: Version 5.4
-          # We keep the name clean to avoid module rejection
-          CUSTOM_NAME="-qgki-Cyber-Gaming"
+          # CRITICAL: This must match your working kernel exactly to use old modules
+          # Based on your photo, we use the stock suffix
+          CUSTOM_NAME="-qgki-gc8c87694a044"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -50,48 +50,47 @@ jobs:
           )
 
           mkdir -p out
-          # Using the 5.4 defconfig path
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- MODULE COMPATIBILITY ---
-          ./scripts/config --file out/.config -e MODULES
-          ./scripts/config --file out/.config -d MODVERSIONS
-          ./scripts/config --file out/.config -d MODULE_SIG
-          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
+          # Fix Section Mismatch (Fatal Error Fix)
+          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
           
-          # --- PERFORMANCE & CHARGING ---
+          # Performance & Fast Charging
           ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
           ./scripts/config --file out/.config -e HZ_1000
           ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
 
-          make "${MAKE_FLAGS[@]}" olddefconfig
-          # Build Image + Modules (.ko)
-          make -j$(nproc) "${MAKE_FLAGS[@]}" all
+          make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
 
-      - name: Prepare AnyKernel3 (A/B + DLKM)
+          # Build Image ONLY (No 'all' or 'modules' target to save time)
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y Image
+          
+      - name: Prepare AnyKernel3 (Image Only)
         run: |
-          # 1. Update script for A/B Slot + Qualcomm Path
+          # 1. Standard A/B & Path Fixes
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
+          
+          # 2. DISABLE MODULE PATCHING (Crucial to skip modules)
+          sed -i 's/do.modules=1/do.modules=0/g' AnyKernel3/anykernel.sh
 
-          # 2. Copy the 5.4 Image
-          cp out/arch/arm64/boot/Image AnyKernel3/
-          
-          # 3. Collect 5.4 Modules
-          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
-          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
-          
-          # 4. Strip Symbols (Very important for 5.4 modules)
-          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
+          # 3. Copy only the Kernel Image
+          if [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image AnyKernel3/
+          else
+            echo "Build failed!"
+            exit 1
+          fi
 
           cd AnyKernel3
-          zip -r9 ../Cyber-5.4-Holi.zip *
+          # Ensure no old modules are accidentally included
+          rm -rf modules/
+          zip -r9 ../Cyber-NoModules-Holi.zip *
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-5.4-Final
-          path: ./Cyber-5.4-Holi.zip
+          name: Cyber-Kernel-NoModules
+          path: ./Cyber-NoModules-Holi.zip
           
