@@ -1,4 +1,4 @@
-name: Build Android Kernel
+name: Build Android Kernel (Cyber-Gaming-Full)
 
 on:
   workflow_dispatch:
@@ -29,12 +29,11 @@ jobs:
 
       - name: Build Kernel
         run: |
-          # Setup toolchain path
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Use an array for flags to keep things clean
+          # Use an array for flags
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -50,47 +49,61 @@ jobs:
 
           # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
-          # --- FIX FAST CHARGING (OPlus/Realme Handshake) ---
+
+          # --- MODULE & HARDWARE FIXES ---
+          # Disable strict version checking (Fixes broken Wi-Fi/Camera)
+          ./scripts/config --file out/.config -e MODULES
+          ./scripts/config --file out/.config -d MODVERSIONS
+          ./scripts/config --file out/.config -d MODULE_SIG
+          ./scripts/config --file out/.config -d MODULE_SIG_ALL
+          ./scripts/config --file out/.config -d MODULE_SIG_FORCE
+          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
+
+          # --- FAST CHARGING FIX ---
           ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
           ./scripts/config --file out/.config -e CONFIG_OPLUS_CHARGER_MTK
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_SHORT_HW_CHECK
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_SMART_CHARGER
-          
-          # Enable Power Supply Class (Needed for OS to see Fast Charge)
           ./scripts/config --file out/.config -e CONFIG_POWER_SUPPLY
           ./scripts/config --file out/.config -e CONFIG_QPNP_SMB5
-          ./scripts/config --file out/.config -e CONFIG_SMB1390_CHARGE_PUMP
-                    # Raise the thermal limit for charging (Caution: Phone will get hot!)
           ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG_TATT_SUPPORT
           ./scripts/config --file out/.config -d CONFIG_OPLUS_CHG_LITE
+          
+          # --- PERFORMANCE TWEAKS ---
+          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -e HZ_1000
 
-          # 2. Build the kernel (Injecting mismatch bypass here)
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          # Sync config
+          make "${MAKE_FLAGS[@]}" olddefconfig
+
+          # 2. Build the kernel and all modules
+          # Added 'all' to ensure modules are compiled
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
 
       - name: Prepare AnyKernel3 Zip
         run: |
-          # Verify image existence
           if [ -f out/arch/arm64/boot/Image ]; then
+            # 1. Copy Kernel
             cp out/arch/arm64/boot/Image AnyKernel3/
+            
+            # 2. Collect and Strip Modules (.ko files)
+            # This reduces size and prepares them for injection
+            mkdir -p AnyKernel3/modules/vendor/lib/modules
+            find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
+            
+            # Optional: Strip debug symbols from modules to save space
+            # aarch64-linux-gnu-strip --strip-debug AnyKernel3/modules/vendor/lib/modules/*.ko
+            
+            # 3. Zip everything
             cd AnyKernel3
-            # Remove any existing zips before creating a new one
             rm -f *.zip
-            zip -r9 Kernel-holi.zip *
+            zip -r9 Kernel-Cyberkillert-Holi.zip *
+            mv Kernel-Cyberkillert-Holi.zip ../
           else
-            echo "FATAL: Kernel Image (vmlinux) failed to compile!"
+            echo "FATAL: Build failed!"
             exit 1
           fi
-
-      - name: Upload Kernel Image
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-Image
-          path: out/arch/arm64/boot/Image
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Flashable-Kernel
-          path: AnyKernel3/Kernel-holi.zip
-
-          
+          name: Kernel-Cyber-Gaming-Package
+          path: ./Kernel-Cyberkillert-Holi.zip
