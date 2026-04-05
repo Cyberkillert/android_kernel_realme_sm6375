@@ -1,4 +1,4 @@
-name: Build Realme SM6375 Kernel (Cyber-Final)
+name: Build Realme SM6375 Kernel (Cyber-Smart-Fix)
 
 on:
   workflow_dispatch:
@@ -11,7 +11,6 @@ jobs:
       - name: Checkout Kernel Source
         uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
           fetch-depth: 1
 
       - name: Install Build Dependencies
@@ -28,27 +27,27 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Fix Techpack & Root Kbuild
+      - name: Smart Techpack & Root Kbuild Fix
         run: |
-          # Ensure the root Kbuild actually descends into the techpack folder
+          # 1. Ensure the root Kbuild descends into techpack
           if ! grep -q "obj-y += techpack/" Kbuild; then
             echo "obj-y += techpack/" >> Kbuild
           fi
 
-          # Manually rewrite techpack/Kbuild to force all hardware folders to compile
-          echo "obj-y += stub/" > techpack/Kbuild
-          echo "obj-y += audio/" >> techpack/Kbuild
-          echo "obj-y += camera/" >> techpack/Kbuild
-          echo "obj-y += display/" >> techpack/Kbuild
-          echo "obj-y += video/" >> techpack/Kbuild
-          echo "obj-y += datapa/" >> techpack/Kbuild
-          echo "obj-y += datarmnet/" >> techpack/Kbuild
-          echo "obj-y += datarmnet-ext/" >> techpack/Kbuild
-          
-          # Check for Wi-Fi techpack and add if present
-          if [ -d "techpack/qcacld-3.0" ]; then
-            echo "obj-y += qcacld-3.0/" >> techpack/Kbuild
-          fi
+          # 2. Reset techpack/Kbuild
+          echo "# Auto-generated Techpack Kbuild" > techpack/Kbuild
+          echo "TECHPACK?=y" >> techpack/Kbuild
+
+          # 3. ONLY add folders that actually have a Makefile or Kbuild
+          # This prevents the 'No rule to make target' error for missing folders
+          for dir in stub audio camera display video datapa datarmnet datarmnet-ext qcacld-3.0; do
+            if [ -f "techpack/$dir/Makefile" ] || [ -f "techpack/$dir/Kbuild" ]; then
+              echo "obj-y += $dir/" >> techpack/Kbuild
+              echo "✅ Found techpack: $dir"
+            else
+              echo "⚠️ Skipping missing/empty techpack: $dir"
+            fi
+          done
 
       - name: Build Kernel (Realme Holi Spec)
         run: |
@@ -56,7 +55,7 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           
-          CUSTOM_NAME="-lineageos-Cyber-Master"
+          CUSTOM_NAME="-lineageos-Cyber-Smart"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -75,22 +74,22 @@ jobs:
           # Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- APPLY LINEAGEOS COMPATIBILITY FIXES ---
-          # Disable module signing to allow camera/wifi drivers to load
+          # --- APPLY LINEAGEOS COMPATIBILITY ---
+          # Disable module signing to allow camera/wifi drivers to load on custom ROMs
           ./scripts/config --file out/.config -d MODULE_SIG
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
           
-          # Enable Performance tuning
+          # Optimization
           ./scripts/config --file out/.config -e HZ_1000
           ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
           ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
 
-          # Sync config and build
+          # Sync and build everything
           make "${MAKE_FLAGS[@]}" olddefconfig
           make -j$(nproc) "${MAKE_FLAGS[@]}" all
 
-      - name: Prepare AnyKernel3 (The 'Bridge' Injection)
+      - name: Prepare AnyKernel3 (Deep Module Collection)
         run: |
           # 1. AnyKernel3 Properties for Realme A/B
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
@@ -102,25 +101,25 @@ jobs:
           # 2. Copy Kernel Image
           cp out/arch/arm64/boot/Image AnyKernel3/
           
-          # 3. Create EXACT Paths for SM6375 Common Tree
-          # Your init.target.rc and modules.load look specifically in these folders
+          # 3. Create EXACT Paths for SM6375 (Holi)
+          # These paths match what the ROM expects in /vendor
           mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
           mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
 
-          # 4. COLLECT ALL DRIVERS (Wi-Fi, Camera, Audio)
-          # This pulls every .ko from the deep techpack folders into the zip
+          # 4. COLLECT ALL DRIVERS
+          # This finds every .ko file built (including WiFi, Camera, Audio)
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
           
-          # 5. Strip symbols (Essential for GKI compatibility)
+          # 5. Strip symbols for GKI compatibility
           find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
           cd AnyKernel3
-          zip -r9 ../Cyber-Realme-Master.zip *
+          zip -r9 ../Cyber-Realme-Smart.zip *
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
           name: Cyber-Kernel-Lineage-SM6375
-          path: ./Cyber-Realme-Master.zip
+          path: ./Cyber-Realme-Smart.zip
           
