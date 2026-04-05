@@ -1,14 +1,18 @@
-name: Build Realme SM6375 Kernel
+name: Build Realme SM6375 Kernel (Cyber-Final)
 
 on:
-  workflow_dispatch: # Allows you to start the build manually
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-22.04
+
     steps:
-      - name: Checkout Workflow
+      - name: Checkout Kernel Source
         uses: actions/checkout@v4
+        with:
+          submodules: 'recursive'
+          fetch-depth: 1
 
       - name: Install Build Dependencies
         run: |
@@ -16,25 +20,44 @@ jobs:
           sudo apt install -y bc bison build-essential flex git curl \
           libssl-dev libelf-dev libncurses-dev python3 unzip zip cpio
 
-      - name: Clone Toolchain (Proton Clang)
+      - name: Clone Proton Clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
-
-      - name: Clone Kernel Source
-        run: |
-          # Replace with your actual kernel repo link
-          git clone --depth=1 https://github.com/Cyberkillert/android_kernel_realme_sm6375 kernel
 
       - name: Clone AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel
+      - name: Fix Techpack & Root Kbuild
+        run: |
+          # Ensure the root Kbuild actually descends into the techpack folder
+          if ! grep -q "obj-y += techpack/" Kbuild; then
+            echo "obj-y += techpack/" >> Kbuild
+          fi
+
+          # Manually rewrite techpack/Kbuild to force all hardware folders to compile
+          echo "obj-y += stub/" > techpack/Kbuild
+          echo "obj-y += audio/" >> techpack/Kbuild
+          echo "obj-y += camera/" >> techpack/Kbuild
+          echo "obj-y += display/" >> techpack/Kbuild
+          echo "obj-y += video/" >> techpack/Kbuild
+          echo "obj-y += datapa/" >> techpack/Kbuild
+          echo "obj-y += datarmnet/" >> techpack/Kbuild
+          echo "obj-y += datarmnet-ext/" >> techpack/Kbuild
+          
+          # Check for Wi-Fi techpack and add if present
+          if [ -d "techpack/qcacld-3.0" ]; then
+            echo "obj-y += qcacld-3.0/" >> techpack/Kbuild
+          fi
+
+      - name: Build Kernel (Realme Holi Spec)
         run: |
           export PATH=$PWD/clang/bin:$PATH
-          cd kernel
+          export ARCH=arm64
+          export SUBARCH=arm64
           
-          # Build Flags
+          CUSTOM_NAME="-lineageos-Cyber-Master"
+
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -44,32 +67,60 @@ jobs:
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             KBUILD_MODPOST_WARN=1
+            LOCALVERSION=$CUSTOM_NAME
           )
 
-          # 1. Load Defconfig (Match your BoardConfigCommon.mk)
+          mkdir -p out
+          
+          # Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 2. Build the Kernel and Techpack Modules
+          # --- APPLY LINEAGEOS COMPATIBILITY FIXES ---
+          # Disable module signing to allow camera/wifi drivers to load
+          ./scripts/config --file out/.config -d MODULE_SIG
+          ./scripts/config --file out/.config -d MODVERSIONS
+          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
+          
+          # Enable Performance tuning
+          ./scripts/config --file out/.config -e HZ_1000
+          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+
+          # Sync config and build
+          make "${MAKE_FLAGS[@]}" olddefconfig
           make -j$(nproc) "${MAKE_FLAGS[@]}" all
 
-      - name: Package with AnyKernel3
+      - name: Prepare AnyKernel3 (The 'Bridge' Injection)
         run: |
-          # 1. Copy Kernel Image
-          cp kernel/out/arch/arm64/boot/Image AnyKernel3/
+          # 1. AnyKernel3 Properties for Realme A/B
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.systemless=1/do.systemless=0/g' AnyKernel3/anykernel.sh
+          sed -i 's|block=.*|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
+
+          # 2. Copy Kernel Image
+          cp out/arch/arm64/boot/Image AnyKernel3/
           
-          # 2. Collect Modules (Wi-Fi/Camera/Audio)
+          # 3. Create EXACT Paths for SM6375 Common Tree
+          # Your init.target.rc and modules.load look specifically in these folders
           mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
-          find kernel/out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
+          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
+
+          # 4. COLLECT ALL DRIVERS (Wi-Fi, Camera, Audio)
+          # This pulls every .ko from the deep techpack folders into the zip
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
           
-          # 3. Strip Symbols (Reduces size)
-          find AnyKernel3/modules -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
+          # 5. Strip symbols (Essential for GKI compatibility)
+          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
           cd AnyKernel3
-          zip -r9 ../Cyber-Kernel-SM6375.zip *
+          zip -r9 ../Cyber-Realme-Master.zip *
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-SM6375
-          path: ./Cyber-Kernel-SM6375.zip
+          name: Cyber-Kernel-Lineage-SM6375
+          path: ./Cyber-Realme-Master.zip
           
