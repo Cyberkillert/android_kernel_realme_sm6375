@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-BuiltIn-5.4)
+name: Build Android Kernel (Cyber-RC-Path-Match)
 
 on:
   workflow_dispatch:
@@ -27,13 +27,14 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel 5.4 (All Built-In)
+      - name: Build Kernel 5.4 (Native RC Fix)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          CUSTOM_NAME="-qgki-Cyber-BuiltIn"
+          # Match your working version string
+          CUSTOM_NAME="-qgki-Cyber-Gaming"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -49,49 +50,61 @@ jobs:
 
           mkdir -p out
 
-          # 1. Load the base defconfig
+          # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- FORCE ALL MODULES TO BE BUILT-IN ---
-          # This script finds every '=m' in the config and changes it to '=y'
-          sed -i 's/=m/=y/g' out/.config
-          
-          # --- NATIVE BYPASS & ERROR FIXES ---
-          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
+          # --- MODULE COMPATIBILITY ---
           ./scripts/config --file out/.config -d MODULE_SIG
+          ./scripts/config --file out/.config -d MODULE_SIG_ALL
+          ./scripts/config --file out/.config -d MODULE_SIG_FORCE
           ./scripts/config --file out/.config -d MODVERSIONS
+          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
+          
+          # --- ERROR BYPASS ---
+          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
-          # --- REALME PERFORMANCE & CHARGING ---
+          # --- PERFORMANCE ---
           ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
           ./scripts/config --file out/.config -e HZ_1000
           ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
 
-          # 2. Sync and Build
-          # Note: 'olddefconfig' might change some '=y' back to '=m' if they HAVE to be modules
+          # Sync config
           make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
-          
-          # Final build (Since everything is built-in, we only need the 'Image')
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y Image
 
-      - name: Prepare AnyKernel3 (Clean Flash)
+          # 2. Build Everything
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
+
+      - name: Prepare AnyKernel3 (Targeted RC Injection)
         run: |
-          # Configure for A/B Slot
+          # 1. Update AnyKernel3 for A/B + Qualcomm
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.systemless=1/do.systemless=0/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
-          
-          # We don't need AnyKernel3 to handle modules anymore because they are INSIDE the Image
-          sed -i 's/do.modules=1/do.modules=0/g' AnyKernel3/anykernel.sh
 
+          # 2. Copy Kernel Image
           cp out/arch/arm64/boot/Image AnyKernel3/
           
+          # 3. Create EXACT paths from init.target.rc
+          # Your RC file looks in /vendor/lib/modules and /vendor/lib/modules/5.4-gki
+          mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
+          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
+
+          # 4. Copy modules to all possible RC locations
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
+          
+          # 5. Strip symbols (Required for loading)
+          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
+
           cd AnyKernel3
-          rm -rf modules/
-          zip -r9 ../Cyber-BuiltIn-Holi.zip *
+          zip -r9 ../Cyber-RC-Matched.zip *
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-BuiltIn-Kernel
-          path: ./Cyber-BuiltIn-Holi.zip
+          name: Cyber-Kernel-RC-Matched
+          path: ./Cyber-RC-Matched.zip
           
