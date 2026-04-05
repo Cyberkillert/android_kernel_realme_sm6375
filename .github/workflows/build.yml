@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-RC-Path-Match)
+name: Build Android Kernel (Cyber-Techpack-Master)
 
 on:
   workflow_dispatch:
@@ -27,14 +27,13 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel 5.4 (Native RC Fix)
+      - name: Build Kernel 5.4 (Full Techpack)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Match your working version string
-          CUSTOM_NAME="-qgki-Cyber-Gaming"
+          CUSTOM_NAME="-qgki-Cyber-Final"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -50,61 +49,56 @@ jobs:
 
           mkdir -p out
 
-          # 1. Load the defconfig
+          # 1. Load Defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- MODULE COMPATIBILITY ---
+          # --- FORCE TECHPACK DRIVERS ---
+          # This ensures the compiler doesn't skip your folders in the screenshot
+          ./scripts/config --file out/.config -e CONFIG_MSM_CAMERA
+          ./scripts/config --file out/.config -e CONFIG_QCA_CLD_WLAN
+          ./scripts/config --file out/.config -e CONFIG_AUDIO_REACH
+          
+          # --- NATIVE MODULE BYPASS ---
           ./scripts/config --file out/.config -d MODULE_SIG
-          ./scripts/config --file out/.config -d MODULE_SIG_ALL
-          ./scripts/config --file out/.config -d MODULE_SIG_FORCE
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
-          
-          # --- ERROR BYPASS ---
           ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
-          # --- PERFORMANCE ---
-          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
-          ./scripts/config --file out/.config -e HZ_1000
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
-
-          # Sync config
+          # Sync and Build
           make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
-
-          # 2. Build Everything
+          
+          # We use 'all' to ensure it hits the techpack/ folder
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
 
-      - name: Prepare AnyKernel3 (Targeted RC Injection)
+      - name: Prepare AnyKernel3 (Deep Module Collection)
         run: |
-          # 1. Update AnyKernel3 for A/B + Qualcomm
+          # Setup AnyKernel3 for Realme A/B
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
           sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
           sed -i 's/do.systemless=1/do.systemless=0/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
 
-          # 2. Copy Kernel Image
+          # 1. Copy Image
           cp out/arch/arm64/boot/Image AnyKernel3/
           
-          # 3. Create EXACT paths from init.target.rc
-          # Your RC file looks in /vendor/lib/modules and /vendor/lib/modules/5.4-gki
+          # 2. THE DEEP COLLECTOR
+          # This finds modules in techpack/camera, techpack/audio, etc.
           mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
           mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
-
-          # 4. Copy modules to all possible RC locations
-          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
+          
+          # Find all modules in the 'out' directory (where techpack builds go)
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
           
-          # 5. Strip symbols (Required for loading)
+          # 3. Strip Symbols
           find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
           cd AnyKernel3
-          zip -r9 ../Cyber-RC-Matched.zip *
+          zip -r9 ../Cyber-Full-Techpack.zip *
 
-      - name: Upload Flashable Zip
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-RC-Matched
-          path: ./Cyber-RC-Matched.zip
-          
+          name: Cyber-Kernel-Full
+          path: ./Cyber-Full-Techpack.zip
