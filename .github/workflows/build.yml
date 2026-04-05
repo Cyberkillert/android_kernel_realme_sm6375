@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Master-Techpack-Fix)
+name: Build Android Kernel (Cyber-Standalone-Master)
 
 on:
   workflow_dispatch:
@@ -27,15 +27,14 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Fix Techpack & Root Kbuild
+      - name: Force Common Tree Logic
         run: |
-          # 1. Force the Root Kbuild to include the techpack folder
+          # 1. Ensure the Root Kbuild links to the techpack (Just like LineageOS does)
           if ! grep -q "obj-y += techpack/" Kbuild; then
             echo "obj-y += techpack/" >> Kbuild
           fi
 
-          # 2. Manually rewrite techpack/Kbuild to bypass the broken 'find' script
-          # This ensures every folder in your screenshot is compiled
+          # 2. Re-map the techpack/Kbuild to match your hardware screenshot
           echo "obj-y += stub/" > techpack/Kbuild
           echo "obj-y += audio/" >> techpack/Kbuild
           echo "obj-y += camera/" >> techpack/Kbuild
@@ -45,19 +44,20 @@ jobs:
           echo "obj-y += datarmnet/" >> techpack/Kbuild
           echo "obj-y += datarmnet-ext/" >> techpack/Kbuild
 
-          # 3. Clone Wi-Fi drivers if they are missing from techpack
+          # 3. Inject Wi-Fi drivers (Crucial for SM6375/Holi)
           if [ ! -d "techpack/qcacld-3.0" ]; then
             git clone --depth=1 https://github.com/LineageOS/android_kernel_qcom_qcacld-3.0 techpack/qcacld-3.0
             echo "obj-y += qcacld-3.0/" >> techpack/Kbuild
           fi
 
-      - name: Build Kernel 5.4 (Native Techpack Fix)
+      - name: Build Kernel 5.4 (Lineage-Holi-Final)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          CUSTOM_NAME="-qgki-Cyber-Final"
+          # This name helps the system modules recognize the 'family'
+          CUSTOM_NAME="-lineageos-Cyber-Standalone"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -74,13 +74,13 @@ jobs:
           mkdir -p out
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- NATIVE BYPASS ---
+          # --- APPLY COMMON TREE SECURITY BYPASS ---
           ./scripts/config --file out/.config -d MODULE_SIG
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
           ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
-
-          # --- PERFORMANCE ---
+          
+          # Tuning for Realme 9 5G (Holi)
           ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
           ./scripts/config --file out/.config -e HZ_1000
           ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
@@ -88,9 +88,9 @@ jobs:
           make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
 
-      - name: Prepare AnyKernel3 (Targeted RC Injection)
+      - name: Prepare AnyKernel3 (The 'Bridge' Injection)
         run: |
-          # 1. Setup AnyKernel3 for A/B
+          # Configure for Realme A/B
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
           sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
@@ -99,24 +99,24 @@ jobs:
 
           cp out/arch/arm64/boot/Image AnyKernel3/
           
-          # 2. Create EXACT paths from your init.target.rc
+          # MATCH THE COMMON TREE DIRECTORY STRUCTURE
+          # LineageOS ROMs for Holi check these exact paths
           mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
           mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
 
-          # 3. THE DEEP COLLECTOR
-          # This finds every .ko file (even deep inside techpack) and copies them
+          # Collect all compiled drivers (Wi-Fi, Camera, Audio)
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
           
-          # 4. Strip symbols
+          # Strip symbols (Makes modules loadable on GKI kernels)
           find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
           cd AnyKernel3
-          zip -r9 ../Cyber-Final-Master.zip *
+          zip -r9 ../Cyber-Kernel-Standalone.zip *
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: Cyber-Kernel-Final
-          path: ./Cyber-Final-Master.zip
+          path: ./Cyber-Kernel-Standalone.zip
           
