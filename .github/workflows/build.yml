@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Techpack-Master)
+name: Build Android Kernel (Cyber-Master-Techpack-Fix)
 
 on:
   workflow_dispatch:
@@ -27,7 +27,31 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel 5.4 (Full Techpack)
+      - name: Fix Techpack & Root Kbuild
+        run: |
+          # 1. Force the Root Kbuild to include the techpack folder
+          if ! grep -q "obj-y += techpack/" Kbuild; then
+            echo "obj-y += techpack/" >> Kbuild
+          fi
+
+          # 2. Manually rewrite techpack/Kbuild to bypass the broken 'find' script
+          # This ensures every folder in your screenshot is compiled
+          echo "obj-y += stub/" > techpack/Kbuild
+          echo "obj-y += audio/" >> techpack/Kbuild
+          echo "obj-y += camera/" >> techpack/Kbuild
+          echo "obj-y += display/" >> techpack/Kbuild
+          echo "obj-y += video/" >> techpack/Kbuild
+          echo "obj-y += datapa/" >> techpack/Kbuild
+          echo "obj-y += datarmnet/" >> techpack/Kbuild
+          echo "obj-y += datarmnet-ext/" >> techpack/Kbuild
+
+          # 3. Clone Wi-Fi drivers if they are missing from techpack
+          if [ ! -d "techpack/qcacld-3.0" ]; then
+            git clone --depth=1 https://github.com/LineageOS/android_kernel_qcom_qcacld-3.0 techpack/qcacld-3.0
+            echo "obj-y += qcacld-3.0/" >> techpack/Kbuild
+          fi
+
+      - name: Build Kernel 5.4 (Native Techpack Fix)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
@@ -48,57 +72,51 @@ jobs:
           )
 
           mkdir -p out
-
-          # 1. Load Defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- FORCE TECHPACK DRIVERS ---
-          # This ensures the compiler doesn't skip your folders in the screenshot
-          ./scripts/config --file out/.config -e CONFIG_MSM_CAMERA
-          ./scripts/config --file out/.config -e CONFIG_QCA_CLD_WLAN
-          ./scripts/config --file out/.config -e CONFIG_AUDIO_REACH
-          
-          # --- NATIVE MODULE BYPASS ---
+          # --- NATIVE BYPASS ---
           ./scripts/config --file out/.config -d MODULE_SIG
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
           ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
-          # Sync and Build
+          # --- PERFORMANCE ---
+          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -e HZ_1000
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+
           make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
-          
-          # We use 'all' to ensure it hits the techpack/ folder
           make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
 
-      - name: Prepare AnyKernel3 (Deep Module Collection)
+      - name: Prepare AnyKernel3 (Targeted RC Injection)
         run: |
-          # Setup AnyKernel3 for Realme A/B
+          # 1. Setup AnyKernel3 for A/B
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
           sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
           sed -i 's/do.systemless=1/do.systemless=0/g' AnyKernel3/anykernel.sh
           sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
 
-          # 1. Copy Image
           cp out/arch/arm64/boot/Image AnyKernel3/
           
-          # 2. THE DEEP COLLECTOR
-          # This finds modules in techpack/camera, techpack/audio, etc.
+          # 2. Create EXACT paths from your init.target.rc
           mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
           mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
-          
-          # Find all modules in the 'out' directory (where techpack builds go)
+
+          # 3. THE DEEP COLLECTOR
+          # This finds every .ko file (even deep inside techpack) and copies them
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
           
-          # 3. Strip Symbols
+          # 4. Strip symbols
           find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
           cd AnyKernel3
-          zip -r9 ../Cyber-Full-Techpack.zip *
+          zip -r9 ../Cyber-Final-Master.zip *
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-Full
-          path: ./Cyber-Full-Techpack.zip
+          name: Cyber-Kernel-Final
+          path: ./Cyber-Final-Master.zip
+          
