@@ -1,4 +1,4 @@
-name: Build Realme SM6375 Kernel (Cyber-Smart-Fix)
+name: Build Lineage Kernel (KSU - GKI Safe)
 
 on:
   workflow_dispatch:
@@ -8,54 +8,44 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Kernel Source
+      - name: 📥 Checkout source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Install Build Dependencies
+      - name: 🛠 Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y bc bison build-essential flex git curl \
-          libssl-dev libelf-dev libncurses-dev python3 unzip zip cpio
+          sudo apt install -y \
+          bc bison build-essential flex git curl \
+          libssl-dev libelf-dev libncurses-dev \
+          python3 unzip zip cpio
 
-      - name: Clone Proton Clang
+      - name: 🔧 Clone Proton Clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-      - name: Clone AnyKernel3
+      - name: 📦 Clone AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Smart Techpack & Root Kbuild Fix
+      - name: 🔥 Setup KernelSU (Safe)
         run: |
-          # 1. Ensure the root Kbuild descends into techpack
-          if ! grep -q "obj-y += techpack/" Kbuild; then
-            echo "obj-y += techpack/" >> Kbuild
+          git clone --depth=1 https://github.com/tiann/KernelSU KernelSU
+          mkdir -p drivers/kernelsu
+          cp -r KernelSU/kernel/* drivers/kernelsu/
+
+          if ! grep -q "kernelsu" drivers/Makefile; then
+            echo "obj-y += kernelsu/" >> drivers/Makefile
           fi
 
-          # 2. Reset techpack/Kbuild
-          echo "# Auto-generated Techpack Kbuild" > techpack/Kbuild
-          echo "TECHPACK?=y" >> techpack/Kbuild
-
-          # 3. ONLY add folders that actually have a Makefile or Kbuild
-          # This prevents the 'No rule to make target' error for missing folders
-          for dir in stub audio camera display video datapa datarmnet datarmnet-ext qcacld-3.0; do
-            if [ -f "techpack/$dir/Makefile" ] || [ -f "techpack/$dir/Kbuild" ]; then
-              echo "obj-y += $dir/" >> techpack/Kbuild
-              echo "✅ Found techpack: $dir"
-            else
-              echo "⚠️ Skipping missing/empty techpack: $dir"
-            fi
-          done
-
-      - name: Build Kernel (Realme Holi Spec)
+      - name: ⚙️ Build Kernel + Modules
         run: |
+          START=$(date +%s)
+
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
-          
-          CUSTOM_NAME="-lineageos-Cyber-Smart"
+
+          CUSTOM_NAME="-KSU-Lineage-Cyber"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -65,61 +55,66 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            KBUILD_MODPOST_WARN=1
             LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
-          
-          # Load the defconfig
-          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- APPLY LINEAGEOS COMPATIBILITY ---
-          # Disable module signing to allow camera/wifi drivers to load on custom ROMs
-          ./scripts/config --file out/.config -d MODULE_SIG
-          ./scripts/config --file out/.config -d MODVERSIONS
-          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
-          
-          # Optimization
-          ./scripts/config --file out/.config -e HZ_1000
-          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+          # ✅ Correct defconfig for LineageOS
+          make "${MAKE_FLAGS[@]}" holi-gki_defconfig
 
-          # Sync and build everything
+          # ✅ Enable required configs
+          ./scripts/config --file out/.config -e MODULES
+          ./scripts/config --file out/.config -e MODVERSIONS
+          ./scripts/config --file out/.config -e KPROBES
+          ./scripts/config --file out/.config -e OVERLAY_FS
+
+          # Disable LTO (more stable)
+          ./scripts/config --file out/.config -d LTO -d LTO_CLANG -e LTO_NONE
+
+          # Apply config
           make "${MAKE_FLAGS[@]}" olddefconfig
-          make -j$(nproc) "${MAKE_FLAGS[@]}" all
 
-      - name: Prepare AnyKernel3 (Deep Module Collection)
+          # 🔨 Build kernel
+          make -j$(nproc) "${MAKE_FLAGS[@]}"
+
+          # 🔨 Build modules
+          make -j$(nproc) "${MAKE_FLAGS[@]}" modules
+
+          # 📦 Install modules
+          mkdir -p modules_out
+          make "${MAKE_FLAGS[@]}" modules_install INSTALL_MOD_PATH=modules_out
+
+          echo "✅ Build + modules completed"
+
+          END=$(date +%s)
+          echo "⏱ Build took $(( ($END - $START) / 60 )) minutes"
+
+      - name: 📦 Prepare AnyKernel3 ZIP
         run: |
-          # 1. AnyKernel3 Properties for Realme A/B
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.systemless=1/do.systemless=0/g' AnyKernel3/anykernel.sh
-          sed -i 's|block=.*|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
+          DATE=$(date +%Y%m%d)
+          ZIP_NAME="Kernel-Lineage-KSU-${DATE}.zip"
 
-          # 2. Copy Kernel Image
-          cp out/arch/arm64/boot/Image AnyKernel3/
-          
-          # 3. Create EXACT Paths for SM6375 (Holi)
-          # These paths match what the ROM expects in /vendor
-          mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
-          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
+          if [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image AnyKernel3/
 
-          # 4. COLLECT ALL DRIVERS
-          # This finds every .ko file built (including WiFi, Camera, Audio)
-          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
-          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
-          
-          # 5. Strip symbols for GKI compatibility
-          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
+            cd AnyKernel3
+            zip -r9 "$ZIP_NAME" *
 
-          cd AnyKernel3
-          zip -r9 ../Cyber-Realme-Smart.zip *
+            echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
+          else
+            echo "❌ Kernel Image not found!"
+            exit 1
+          fi
 
-      - name: Upload Flashable Zip
+      - name: 🚀 Upload Kernel ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-Lineage-SM6375
-          path: ./Cyber-Realme-Smart.zip
-          
+          name: Lineage-Kernel-KSU
+          path: AnyKernel3/${{ env.FINAL_ZIP_NAME }}
+
+      - name: 📂 Upload Modules (for debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Kernel-Modules
+          path: modules_out/
