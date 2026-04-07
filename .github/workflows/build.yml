@@ -51,7 +51,7 @@ jobs:
           mkdir -p out
 
           # 1. Load the defconfig
-          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
+          make "${MAKE_FLAGS[@]}" vendor/holi-gki_defconfig
 
           # --- GAMING & PERFORMANCE TWEAKS ---
           
