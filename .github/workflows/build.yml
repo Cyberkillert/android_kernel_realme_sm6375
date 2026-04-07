@@ -61,7 +61,7 @@ jobs:
           mkdir -p out
 
           # ✅ Correct defconfig for LineageOS
-          make "${MAKE_FLAGS[@]}" holi-gki_defconfig
+          make "${MAKE_FLAGS[@]}" vendor/holi-gki_defconfig
 
           # ✅ Enable required configs
           ./scripts/config --file out/.config -e MODULES
