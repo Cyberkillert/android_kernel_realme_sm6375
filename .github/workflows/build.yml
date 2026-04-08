@@ -1,4 +1,4 @@
-name: Build Kernel (SM6375 Lineage GKI Safe)
+name: Build Android Kernel (Cyber-NetHunter)
 
 on:
   workflow_dispatch:
@@ -8,10 +8,10 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: 📥 Checkout source
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: 🛠 Install dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
@@ -19,37 +19,22 @@ jobs:
           libssl-dev libelf-dev libncurses-dev \
           python3 unzip zip cpio
 
-      - name: 🔧 Fix Kconfig line endings
-        run: |
-          find . -name "Kconfig" -exec sed -i 's/\r$//' {} \;
-
-      - name: 🔧 Clone Proton Clang
+      - name: Clone Proton Clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-      - name: 📦 Clone AnyKernel3
+      - name: Clone AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: 🔥 Setup KernelSU (Safe)
+      - name: Build Kernel
         run: |
-          git clone --depth=1 https://github.com/tiann/KernelSU KernelSU
-          mkdir -p drivers/kernelsu
-          cp -r KernelSU/kernel/* drivers/kernelsu/
-
-          if ! grep -q "kernelsu" drivers/Makefile; then
-            echo "obj-y += kernelsu/" >> drivers/Makefile
-          fi
-
-      - name: ⚙️ Build Kernel + Modules
-        run: |
-          START=$(date +%s)
-
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
-
-          CUSTOM_NAME="-KSU-Cyber"
+          
+          # Custom branding for Cyberkillert
+          CUSTOM_NAME="-NetHunter-Cyber"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -59,73 +44,47 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            KBUILD_MODPOST_WARN=1
             LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
-
-          # ✅ Correct defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-gki_defconfig
 
-          # ✅ Required configs
-          ./scripts/config --file out/.config -e MODULES
-          ./scripts/config --file out/.config -e MODVERSIONS
-          ./scripts/config --file out/.config -e KPROBES
-          ./scripts/config --file out/.config -e OVERLAY_FS
+          # NETHUNTER CONFIGURATION (No external clone needed)
+          ./scripts/config --file out/.config -e USB_F_HID
+          ./scripts/config --file out/.config -e USB_CONFIGFS_F_HID
+          ./scripts/config --file out/.config -e MAC80211
+          ./scripts/config --file out/.config -e CFG80211
+          ./scripts/config --file out/.config -e CFG80211_WEXT
+          ./scripts/config --file out/.config -e RFKILL
+          ./scripts/config --file out/.config -e BT_HCIUART
+          ./scripts/config --file out/.config -e BT_HCIBTUSB
 
-          # ❌ Disable problematic drivers (fix build crash)
-          ./scripts/config --file out/.config -d INPUT_HALL
-          ./scripts/config --file out/.config -d OPLUS_SECURE_DRIVERS
-          ./scripts/config --file out/.config -d OPLUS_FEATURE
+          # Build it
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 
-          # Disable LTO (stability)
-          ./scripts/config --file out/.config -d LTO
-          ./scripts/config --file out/.config -d LTO_CLANG
-          ./scripts/config --file out/.config -e LTO_NONE
-
-          # Apply config
-          make "${MAKE_FLAGS[@]}" olddefconfig
-
-          # 🔨 Build kernel
-          make -j$(nproc) "${MAKE_FLAGS[@]}"
-
-          # 🔨 Build modules
-          make -j$(nproc) "${MAKE_FLAGS[@]}" modules
-
-          # 📦 Install modules
-          mkdir -p modules_out
-          make "${MAKE_FLAGS[@]}" modules_install INSTALL_MOD_PATH=modules_out
-
-          echo "✅ Build completed"
-
-          END=$(date +%s)
-          echo "⏱ Build took $(( ($END - $START) / 60 )) minutes"
-
-      - name: 📦 Prepare AnyKernel3 ZIP
+      - name: Prepare AnyKernel3 Zip
         run: |
           DATE=$(date +%Y%m%d)
-          ZIP_NAME="Kernel-KSU-${DATE}.zip"
-
+          ZIP_NAME="Kernel-Cyber-NetHunter-${DATE}.zip"
+          
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
-
             cd AnyKernel3
             zip -r9 "$ZIP_NAME" *
-
+            # Move zip up to the root to avoid "zip inside a zip"
+            mv "$ZIP_NAME" ../
             echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           else
-            echo "❌ Kernel Image missing!"
+            echo "FATAL: Image failed to compile!"
             exit 1
           fi
 
-      - name: 🚀 Upload Kernel ZIP
+      - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-KSU
-          path: AnyKernel3/${{ env.FINAL_ZIP_NAME }}
-
-      - name: 📂 Upload Modules (IMPORTANT)
-        uses: actions/upload-artifact@v4
-        with:
-          name: Kernel-Modules
-          path: modules_out/
+          # This name will be the name of the download link
+          name: ${{ env.FINAL_ZIP_NAME }}
+          path: ./${{ env.FINAL_ZIP_NAME }}
+          
