@@ -47,10 +47,10 @@ jobs:
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
           # --- APPLY BOARDCONFIG SPECS ---
-          # 1. Match Page Size (4096 is default in most 5.4, but let's be sure)
+          # 1. Match Page Size
           ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
           
-          # 2. Disable Security (Allow Unsigned Modules)
+          # 2. Disable Security
           ./scripts/config --file out/.config -d MODULE_SIG
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
@@ -65,24 +65,24 @@ jobs:
       - name: Prepare AnyKernel3 (Systemless Bypass for EROFS)
         run: |
           # 1. AnyKernel3 Setup for A/B + Header V3
+          # Fix: Block path and is_slot_device as requested
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
-          
-          # CRITICAL: Force Systemless because /vendor is EROFS (Read-Only)
           sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
 
-          # 2. Add the Official CMDLINE from your BoardConfig
+          # 2. Add CMDLINE
           echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3/anykernel.sh
 
           cp out/arch/arm64/boot/Image AnyKernel3/
           
-          # 3. Module Mapping (Updated Path)
+          # 3. Fix: New Module Mapping Path
           mkdir -p AnyKernel3/modules/vendor/lib/modules/
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
           
-          # Rename wlan to match the Alias in BoardConfig
+          # Rename wlan alias
           if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
             cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko AnyKernel3/modules/vendor/lib/modules/wlan.ko
           fi
