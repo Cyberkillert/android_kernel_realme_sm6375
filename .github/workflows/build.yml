@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Gaming)
+name: Build Android Kernel (Cyber-Official-Spec)
 
 on:
   workflow_dispatch:
@@ -19,22 +19,18 @@ jobs:
           libssl-dev libelf-dev libncurses-dev \
           python3 unzip zip cpio
 
-      - name: Clone Proton Clang
+      - name: Clone Toolchain & AnyKernel
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
-
-      - name: Clone AnyKernel3
-        run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel
+      - name: Build Kernel 5.4 (Match BoardConfig)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
-          export SUBARCH=arm64
           
-          # Branding for the Gaming version
-          CUSTOM_NAME="-Cluster-Gaming-MAX"
+          # Match Official LineageOS naming
+          CUSTOM_NAME="-lineageos-Cyber-Holi"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -44,62 +40,61 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            KBUILD_MODPOST_WARN=1
             LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
+          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 1. Load the defconfig
-          make "${MAKE_FLAGS[@]}" vendor/holi-gki_defconfig
-
-          # --- GAMING & PERFORMANCE TWEAKS ---
+          # --- APPLY BOARDCONFIG SPECS ---
+          # 1. Match Page Size (4096 is default in most 5.4, but let's be sure)
+          ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
           
-          # Enable Performance Governor by default
-          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
-          ./scripts/config --file out/.config -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
-          ./scripts/config --file out/.config -e CPU_FREQ_DEFAULT_GOV_PERFORMANCE
-
-          # Enable BBR TCP Congestion Control (Lower Ping for Online Gaming)
-          ./scripts/config --file out/.config -e TCP_CONG_BBR
-          ./scripts/config --file out/.config -d DEFAULT_TCP_CONG_CUBIC
-          ./scripts/config --file out/.config -e DEFAULT_TCP_CONG_BBR
-
-          # Optimize for Low Latency (Tick rate)
-          ./scripts/config --file out/.config -e HZ_1000
-          ./scripts/config --file out/.config -d HZ_300
-
-          # Disable Debugging/Logging (Reduces CPU overhead for more FPS)
-          ./scripts/config --file out/.config -d SLUB_DEBUG
-          ./scripts/config --file out/.config -d SCHED_DEBUG
-          ./scripts/config --file out/.config -d DEBUG_MISC
-
-          # Enable Graphics/GPU Performance boost
-          ./scripts/config --file out/.config -e MSM_ADRENO_DEFAULT_GOV_PERFORMANCE
+          # 2. Disable Security (Allow Unsigned Modules)
+          ./scripts/config --file out/.config -d MODULE_SIG
+          ./scripts/config --file out/.config -d MODVERSIONS
+          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
           
-          # --- END TWEAKS ---
+          # 3. Enable Realme Specific Features
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
-          # 3. Build the kernel
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          make "${MAKE_FLAGS[@]}" olddefconfig
+          make -j$(nproc) "${MAKE_FLAGS[@]}" all
 
-      - name: Prepare AnyKernel3 Zip
+      - name: Prepare AnyKernel3 (Systemless Bypass for EROFS)
         run: |
-          DATE=$(date +%Y%m%d)
-          ZIP_NAME="Kernel-Cyber-Gaming-Holi-${DATE}.zip"
-          if [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image AnyKernel3/
-            cd AnyKernel3
-            zip -r9 "$ZIP_NAME" *
-            mv "$ZIP_NAME" ../
-            echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
-          else
-            echo "FATAL: Build failed!"
-            exit 1
+          # 1. AnyKernel3 Setup for A/B + Header V3
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          
+          # CRITICAL: Force Systemless because /vendor is EROFS (Read-Only)
+          sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
+
+          # 2. Add the Official CMDLINE from your BoardConfig
+          # This ensures the kernel knows how to talk to the USB/Power hardware
+          echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3/anykernel.sh
+
+          cp out/arch/arm64/boot/Image AnyKernel3/
+          
+          # 3. Module Mapping (Match the 5.4-gki path)
+          mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
+          
+          # Rename wlan to match the Alias in BoardConfig
+          if [ -f AnyKernel3/modules/vendor/lib/modules/5.4-gki/qca_cld3_wlan.ko ]; then
+            cp AnyKernel3/modules/vendor/lib/modules/5.4-gki/qca_cld3_wlan.ko AnyKernel3/modules/vendor/lib/modules/5.4-gki/wlan.ko
           fi
 
-      - name: Upload Flashable Zip
+          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
+
+          cd AnyKernel3
+          zip -r9 ../Cyber-Final-Holi.zip *
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.FINAL_ZIP_NAME }}
-          path: ./${{ env.FINAL_ZIP_NAME }}
+          name: Cyber-Kernel-Official-Match
+          path: ./Cyber-Final-Holi.zip
           
