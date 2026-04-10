@@ -1,4 +1,4 @@
-name: Build Realme SM6375 (Cyber-NetHunter-Final)
+name: Build Android Kernel (Cyber-Realme-5.4-Final)
 
 on:
   workflow_dispatch:
@@ -8,136 +8,99 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout source
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
 
-      - name: Install Build Dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y bc bison build-essential flex git curl \
-          libssl-dev libelf-dev libncurses-dev python3 unzip zip cpio \
-          binutils-aarch64-linux-gnu binutils-arm-linux-gnueabi
+          sudo apt install -y \
+          bc bison build-essential flex git curl \
+          libssl-dev libelf-dev libncurses-dev \
+          python3 unzip zip cpio
 
-      - name: Download AOSP Clang 12
+      - name: Clone Proton Clang
         run: |
-          mkdir -p clang
-          URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master-kernel-build-2021/clang-r416183b.tar.gz"
-          curl -L "$URL" -o clang.tgz
-          tar -xzf clang.tgz -C clang
-          rm clang.tgz
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
       - name: Clone AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Patch Oplus & Audio Source
-        run: |
-          # Fix 1: Pointer cast error in oplus_project.c (uint32_t to uintptr_t)
-          PROJ_FILE="drivers/soc/oplus/system/oplus_project/gki/oplus_project.c"
-          if [ -f "$PROJ_FILE" ]; then
-            sed -i 's/(uint32_t)(p)/(uintptr_t)(p)/g' $PROJ_FILE
-          fi
-          
-          # Fix 2: Common Audio prototype error
-          find techpack/audio -name "*.c" -exec sed -i 's/()/(void)/g' {} +
-          echo "✅ Applied source code patches"
-
-      - name: Build Kernel (NetHunter Spec)
+      - name: Build Kernel 5.4 (Oplus-Native Fix)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
+          # Match your working version string
+          CUSTOM_NAME="-qgki-Cyber-Native"
+
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
             CC=clang
-            CLANG_TRIPLE=aarch64-linux-gnu-
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             LLVM=1
             LLVM_IAS=1
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
             KBUILD_MODPOST_WARN=1
-            LOCALVERSION="-NetHunter-Cyber"
+            LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
-          
-          # Load your specific GKI config
-          make "${MAKE_FLAGS[@]}" vendor/holi-gki_defconfig
 
-          # NetHunter Configs
-          ./scripts/config --file out/.config -e USB_F_HID
-          ./scripts/config --file out/.config -e USB_CONFIGFS_F_HID
-          ./scripts/config --file out/.config -e MAC80211
-          ./scripts/config --file out/.config -e CFG80211
-          ./scripts/config --file out/.config -e CFG80211_WEXT
-          ./scripts/config --file out/.config -e RFKILL
+          # 1. Load the defconfig (Uses the Makefile you provided)
+          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # Security/Signature Bypass
+          # --- NATIVE MODULE BYPASS ---
+          # These flags allow your hardware modules to load without Magisk
           ./scripts/config --file out/.config -d MODULE_SIG
+          ./scripts/config --file out/.config -d MODULE_SIG_ALL
+          ./scripts/config --file out/.config -d MODULE_SIG_FORCE
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
+          
+          # --- FATAL ERROR BYPASS ---
           ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
-          make -j$(nproc) "${MAKE_FLAGS[@]}" all
+          # --- REALME GAMING & CHARGING ---
+          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -e HZ_1000
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_FEATURE_FEEDBACK
 
-      - name: Prepare AnyKernel3 (Custom Script Logic)
+          # Sync config
+          make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
+
+          # 2. Build Everything (Image + .ko modules)
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
+
+      - name: Prepare AnyKernel3 (Physical DLKM Injection)
         run: |
-          # 1. Overwrite anykernel.sh with your requested template logic
-          cat <<EOF > AnyKernel3/anykernel.sh
-          # AnyKernel3 Ramdisk Mod Script
-          # osm0sis @ xda-developers
+          # Configure AnyKernel3 for Realme A/B Slot
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.systemless=1/do.systemless=0/g' AnyKernel3/anykernel.sh
+          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
 
-          properties() { '
-          kernel.string=CyberKernel for Realme (Holi)
-          do.devicecheck=0
-          do.modules=1
-          do.systemless=0
-          do.cleanup=1
-          do.cleanuponabort=0
-          device.name1=luigi
-          device.name2=RMX3471
-          device.name3=oscaro
-          device.name4=CPH2409
-          supported.versions=12-16
-          '; }
-
-          block=/dev/block/by-name/boot;
-          is_slot_device=1;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
-
-          . tools/ak3-core.sh;
-
-          dump_boot;
-
-          if [ -d "\$home/modules" ]; then
-            ui_print " " "Installing kernel modules...";
-            cp -rf \$home/modules/vendor \$SYSTEM_ROOT/;
-          fi;
-
-          write_boot;
-          EOF
-
-          # 2. Copy Kernel Image
+          # Copy Kernel Image
           cp out/arch/arm64/boot/Image AnyKernel3/
           
-          # 3. Create the module path expected by your script block
-          mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
-          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
+          # Collect and Strip Modules for DLKM
+          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
           
-          # 4. Strip debug symbols
+          # Strip symbols (Prevents "Invalid Format" errors on 5.4 kernels)
           find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
           cd AnyKernel3
-          zip -r9 ../Cyber-NetHunter-Final.zip *
+          zip -r9 ../Cyber-Final-Native-5.4.zip *
 
-      - name: Upload Artifact
+      - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-NetHunter
-          path: ./Cyber-NetHunter-Final.zip
+          name: Cyber-Kernel-Final
+          path: ./Cyber-Final-Native-5.4.zip
           
