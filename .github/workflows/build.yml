@@ -8,33 +8,37 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
+      - name: 📥 Checkout source
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: 🛠 Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
           bc bison build-essential flex git curl \
           libssl-dev libelf-dev libncurses-dev \
-          python3 unzip zip cpio
+          python3 unzip zip cpio lld llvm
 
-      - name: Clone Proton Clang
+      - name: 🔧 Fix Kconfig issues
+        run: |
+          find . -name "Kconfig" -exec sed -i 's/\r$//' {} \;
+
+      - name: 🔧 Clone Proton Clang
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-      - name: Clone AnyKernel3
+      - name: 📦 Clone AnyKernel3
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel 5.4 (Oplus-Native Fix)
+      - name: ⚙️ Build Kernel + Modules
         run: |
+          # Set up paths and environment
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
-          
-          # Match your working version string
-          CUSTOM_NAME="-qgki-Cyber-Native"
+
+          CUSTOM_NAME="-Cyber-Native"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -44,63 +48,109 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            KBUILD_MODPOST_WARN=1
             LOCALVERSION=$CUSTOM_NAME
           )
 
           mkdir -p out
 
-          # 1. Load the defconfig (Uses the Makefile you provided)
+          # ✅ Load correct defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- NATIVE MODULE BYPASS ---
-          # These flags allow your hardware modules to load without Magisk
+          # 🔥 Module bypass & Config Tweaks
           ./scripts/config --file out/.config -d MODULE_SIG
           ./scripts/config --file out/.config -d MODULE_SIG_ALL
           ./scripts/config --file out/.config -d MODULE_SIG_FORCE
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
-          
-          # --- FATAL ERROR BYPASS ---
-          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
+          ./scripts/config --file out/.config -d INPUT_HALL
+          ./scripts/config --file out/.config -d OPLUS_SECURE_DRIVERS
 
-          # --- REALME GAMING & CHARGING ---
-          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
-          ./scripts/config --file out/.config -e HZ_1000
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_FEATURE_FEEDBACK
+          # Apply config changes
+          make "${MAKE_FLAGS[@]}" olddefconfig
 
-          # Sync config
-          make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
+          # 🔨 Build kernel
+          make -j$(nproc) "${MAKE_FLAGS[@]}"
 
-          # 2. Build Everything (Image + .ko modules)
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
+          # 🔨 Build and install modules to a staging area
+          make -j$(nproc) "${MAKE_FLAGS[@]}" modules
+          make "${MAKE_FLAGS[@]}" modules_install INSTALL_MOD_PATH=../modules_out
 
-      - name: Prepare AnyKernel3 (Physical DLKM Injection)
+          echo "✅ Build completed"
+
+      - name: 📦 Prepare AnyKernel3 (Vendor Modules Method)
         run: |
-          # Configure AnyKernel3 for Realme A/B Slot
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.systemless=1/do.systemless=0/g' AnyKernel3/anykernel.sh
-          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
+          # Add toolchain to path for stripping modules
+          export PATH=$PWD/clang/bin:$PATH
 
-          # Copy Kernel Image
-          cp out/arch/arm64/boot/Image AnyKernel3/
-          
-          # Collect and Strip Modules for DLKM
-          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
-          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
-          
-          # Strip symbols (Prevents "Invalid Format" errors on 5.4 kernels)
+          # Copy kernel image
+          if [ -f out/arch/arm64/boot/Image ]; then
+            cp out/arch/arm64/boot/Image AnyKernel3/
+          fi
+
+          # Create module directory structure in AnyKernel3
+          mkdir -p AnyKernel3/modules/vendor/lib/modules
+
+          # Copy compiled modules and strip them to save space
+          find modules_out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
           find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
-          cd AnyKernel3
-          zip -r9 ../Cyber-Final-Native-5.4.zip *
+          # 🔥 Create custom anykernel.sh
+          # Note: 'EOF' prevents the runner from trying to expand $home variables
+          cat > AnyKernel3/anykernel.sh << 'EOF'
+# AnyKernel3 Ramdisk Mod Script
+# Cyber Kernel
 
-      - name: Upload Flashable Zip
+properties() { '
+kernel.string=Cyber Kernel for Realme 10 Pro 5G
+do.devicecheck=0
+do.modules=1
+do.systemless=0
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=RMX3660
+device.name2=realme 10 Pro 5G
+supported.versions=12-16
+'; }
+
+block=/dev/block/bootdevice/by-name/boot;
+is_slot_device=1;
+ramdisk_compression=auto;
+
+. tools/ak3-core.sh;
+
+ui_print " "
+ui_print "🔥 Flashing Cyber Kernel..."
+ui_print "📦 Installing modules..."
+
+dump_boot;
+
+# Mount vendor partition
+mount_vendor;
+
+# Clean old modules
+rm -rf /vendor/lib/modules/*
+
+# Copy new modules
+cp -rf $home/modules/vendor/lib/modules/* /vendor/lib/modules/
+
+# Fix permissions
+chmod -R 0644 /vendor/lib/modules/*
+chown -R root:root /vendor/lib/modules/*
+
+ui_print "✅ Modules installed successfully"
+
+write_boot;
+
+ui_print "🚀 Flash complete!"
+EOF
+
+          # Create flashable zip
+          cd AnyKernel3
+          zip -r9 ../Cyber-Kernel-Final.zip * -x .git* README.md *placeholder
+
+      - name: 🚀 Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-Final
-          path: ./Cyber-Final-Native-5.4.zip
+          name: Cyber-Kernel-Release
+          path: Cyber-Kernel-Final.zip
           
