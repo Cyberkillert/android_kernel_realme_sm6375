@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Official-Spec)
+Name: Build Android Kernel (Cyber-Official-Spec)
 
 on:
   workflow_dispatch:
@@ -62,16 +62,15 @@ jobs:
           make "${MAKE_FLAGS[@]}" olddefconfig
           make -j$(nproc) "${MAKE_FLAGS[@]}" all
 
-            - name: Prepare AnyKernel3 (Systemless Bypass for EROFS)
+      - name: Prepare AnyKernel3 (Systemless Bypass for EROFS)
         run: |
           # 1. AnyKernel3 Setup for A/B + Header V3
-          # Specifically setting the block device and slot status
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
           
-          # Force Systemless because /vendor is EROFS (Read-Only)
+          # CRITICAL: Force Systemless because /vendor is EROFS (Read-Only)
           sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
 
           # 2. Add the Official CMDLINE from your BoardConfig
@@ -79,7 +78,7 @@ jobs:
 
           cp out/arch/arm64/boot/Image AnyKernel3/
           
-          # 3. Updated Module Mapping Path: /modules/vendor/lib/modules/
+          # 3. Module Mapping (Updated Path)
           mkdir -p AnyKernel3/modules/vendor/lib/modules/
           find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
           
@@ -88,13 +87,10 @@ jobs:
             cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko AnyKernel3/modules/vendor/lib/modules/wlan.ko
           fi
 
-          # Strip debug symbols from modules
-          # Note: uses the cross-compiler toolchain from the build step
-          $PWD/clang/bin/llvm-strip --strip-debug AnyKernel3/modules/vendor/lib/modules/*.ko
+          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
           cd AnyKernel3
           zip -r9 ../Cyber-Final-Holi.zip *
-
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
