@@ -1,4 +1,4 @@
-Name: Build Android Kernel (Cyber-Official-Spec)
+name: Build Android Kernel (Cyber-Official-Spec)
 
 on:
   workflow_dispatch:
