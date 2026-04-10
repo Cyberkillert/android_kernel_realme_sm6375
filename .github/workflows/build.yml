@@ -17,7 +17,7 @@ jobs:
           sudo apt install -y \
           bc bison build-essential flex git curl \
           libssl-dev libelf-dev libncurses-dev \
-          python3 unzip zip cpio
+          python3 unzip zip cpio binutils-aarch64-linux-gnu
 
       - name: Clone Proton Clang
         run: |
@@ -33,7 +33,6 @@ jobs:
           export ARCH=arm64
           export SUBARCH=arm64
           
-          # Custom branding for Cyberkillert
           CUSTOM_NAME="-NetHunter-Cyber"
 
           MAKE_FLAGS=(
@@ -51,7 +50,7 @@ jobs:
           mkdir -p out
           make "${MAKE_FLAGS[@]}" vendor/holi-gki_defconfig
 
-          # NETHUNTER CONFIGURATION (No external clone needed)
+          # NETHUNTER CONFIGURATION
           ./scripts/config --file out/.config -e USB_F_HID
           ./scripts/config --file out/.config -e USB_CONFIGFS_F_HID
           ./scripts/config --file out/.config -e MAC80211
@@ -70,10 +69,22 @@ jobs:
           ZIP_NAME="Kernel-Cyber-NetHunter-${DATE}.zip"
           
           if [ -f out/arch/arm64/boot/Image ]; then
+            # 1. Copy Kernel Image
             cp out/arch/arm64/boot/Image AnyKernel3/
+            
+            # 2. FIX: Include Modules (Crucial for WiFi/Camera)
+            # This creates the path expected by GKI devices like yours
+            mkdir -p AnyKernel3/modules/vendor/lib/modules/5.4-gki
+            find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/5.4-gki/ \;
+            
+            # 3. FIX: AnyKernel Script Settings
+            # This makes the zip work for Realme A/B slot devices
+            sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+            sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+            sed -i 's|block=.*|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
+            
             cd AnyKernel3
             zip -r9 "$ZIP_NAME" *
-            # Move zip up to the root to avoid "zip inside a zip"
             mv "$ZIP_NAME" ../
             echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           else
@@ -84,7 +95,6 @@ jobs:
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          # This name will be the name of the download link
           name: ${{ env.FINAL_ZIP_NAME }}
           path: ./${{ env.FINAL_ZIP_NAME }}
           
