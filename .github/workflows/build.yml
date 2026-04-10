@@ -1,4 +1,4 @@
-name: Build Android Kernel (KSU-Next + SUSFS)
+name: Build Android Kernel (Cyber-Gaming-5.4-Final)
 
 on:
   workflow_dispatch:
@@ -27,40 +27,15 @@ jobs:
         run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Setup KernelSU-Next (Manual Integration)
+      - name: Build Kernel 5.4
         run: |
-          git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next
-          mkdir -p drivers/ksu
-          cp -r KernelSU-Next/kernel/* drivers/ksu/
-          if ! grep -q "obj-y += ksu/" drivers/Makefile; then
-            echo "obj-y += ksu/" >> drivers/Makefile
-          fi
-          echo "KernelSU-Next integrated successfully."
-
-      - name: Setup SUSFS
-        run: |
-          # Use a verified public mirror for SUSFS patches
-          git clone --depth=1 https://github.com/WildKernels/kernel_patches.git susfs_repo
-          
-          # Copy core SUSFS files to your source (using generic names for compatibility)
-          # Note: If filenames vary in the repo, check 'susfs_repo/SUSFS/' folder
-          find susfs_repo -name "susfs.h" -exec cp {} include/linux/ \;
-          find susfs_repo -name "susfs.c" -exec cp {} fs/ \;
-          
-          # Link SUSFS in the filesystem Makefile
-          if ! grep -q "susfs.o" fs/Makefile; then
-            sed -i '/obj-y += open.o/a obj-y += susfs.o' fs/Makefile
-          fi
-          echo "SUSFS integrated successfully."
-
-      - name: Build Kernel
-        run: |
-          START=$(date +%s)
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           export SUBARCH=arm64
           
-          CUSTOM_NAME="-KSU-Next-SUSFS-cyber"
+          # Match your working LineageOS version string
+          CUSTOM_NAME="-qgki-Cyber-Gaming"
+
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -74,36 +49,62 @@ jobs:
           )
 
           mkdir -p out
+
+          # 1. Load the defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # DISABLE LTO for stability
-          ./scripts/config --file out/.config -d LTO -d LTO_CLANG -e LTO_NONE
-          
-          # Enable KSU & SUSFS Configs
-          ./scripts/config --file out/.config -e KPROBES -e OVERLAY_FS -e KERNELSU
-          ./scripts/config --file out/.config -e SUSFS -e SUSFS_HIDE_KSU -e SUSFS_TRY_UMOUNT
+          # --- FIX SECTION MISMATCH (FATAL ERROR FIX) ---
+          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
-          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          # --- MODULE COMPATIBILITY ---
+          ./scripts/config --file out/.config -e MODULES
+          ./scripts/config --file out/.config -d MODVERSIONS
+          ./scripts/config --file out/.config -d MODULE_SIG
+          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
           
-          END=$(date +%s)
-          echo "Build took $(( ($END - $START) / 60 )) minutes."
+          # --- PERFORMANCE & CHARGING ---
+          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
+          ./scripts/config --file out/.config -e CPU_FREQ_DEFAULT_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -e HZ_1000
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
 
-      - name: Prepare AnyKernel3 Zip
+          # Sync config with the mismatch bypass
+          make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
+
+          # 2. Build everything (Image + all .ko modules)
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
+
+      - name: Prepare AnyKernel3 (A/B + DLKM)
         run: |
-          DATE=$(date +%Y%m%d)
-          ZIP_NAME="Kernel-cyber-KSU-SUSFS-${DATE}.zip"
+          # 1. Fix script for A/B + Qualcomm Path
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
+
+          # 2. Copy the 5.4 Image
           if [ -f out/arch/arm64/boot/Image ]; then
             cp out/arch/arm64/boot/Image AnyKernel3/
-            cd AnyKernel3
-            zip -r9 "$ZIP_NAME" *
-            echo "FINAL_ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
           else
+            echo "Build failed: Image not found!"
             exit 1
           fi
+          
+          # 3. Collect and Strip 5.4 Modules
+          # Putting modules in vendor_dlkm path for Realme A/B
+          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
+          
+          # Strip debug symbols to prevent 'Exec format error' and keep zip small
+          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
+
+          cd AnyKernel3
+          zip -r9 ../Cyber-5.4-Final-Holi.zip *
 
       - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
         with:
-          name: Kernel-KSU-Next-Cyber
-          path: AnyKernel3/${{ env.FINAL_ZIP_NAME }}
+          name: Cyber-Kernel-5.4-Final
+          path: ./Cyber-5.4-Final-Holi.zip
           
