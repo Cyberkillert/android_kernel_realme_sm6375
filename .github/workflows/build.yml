@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Realme-5.4-Final)
+name: Build Android Kernel (Cyber-Official-Spec)
 
 on:
   workflow_dispatch:
@@ -8,37 +8,29 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: 📥 Checkout source
+      - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: 🛠 Install dependencies
+      - name: Install dependencies
         run: |
           sudo apt update
           sudo apt install -y \
           bc bison build-essential flex git curl \
           libssl-dev libelf-dev libncurses-dev \
-          python3 unzip zip cpio lld llvm
+          python3 unzip zip cpio
 
-      - name: 🔧 Fix Kconfig issues
-        run: |
-          find . -name "Kconfig" -exec sed -i 's/\r$//' {} \;
-
-      - name: 🔧 Clone Proton Clang
+      - name: Clone Toolchain & AnyKernel
         run: |
           git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
-
-      - name: 📦 Clone AnyKernel3
-        run: |
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: ⚙️ Build Kernel + Modules
+      - name: Build Kernel 5.4 (Match BoardConfig)
         run: |
-          # Set up paths and environment
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
-          export SUBARCH=arm64
-
-          CUSTOM_NAME="-Cyber-Native"
+          
+          # Match Official LineageOS naming
+          CUSTOM_NAME="-lineageos-Cyber-Holi"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -52,105 +44,60 @@ jobs:
           )
 
           mkdir -p out
-
-          # ✅ Load correct defconfig
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # 🔥 Module bypass & Config Tweaks
+          # --- APPLY BOARDCONFIG SPECS ---
+          # 1. Match Page Size
+          ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
+          ./scripts/config --file out/.config -d CONFIG_DEBUG_INFO
+          ./scripts/config --file out/.config -d CONFIG_DEBUG_KERNEL
+          
+          # 2. Disable Security
           ./scripts/config --file out/.config -d MODULE_SIG
-          ./scripts/config --file out/.config -d MODULE_SIG_ALL
-          ./scripts/config --file out/.config -d MODULE_SIG_FORCE
           ./scripts/config --file out/.config -d MODVERSIONS
           ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
-          ./scripts/config --file out/.config -d INPUT_HALL
-          ./scripts/config --file out/.config -d OPLUS_SECURE_DRIVERS
+          
+          # 3. Enable Realme Specific Features
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
-          # Apply config changes
           make "${MAKE_FLAGS[@]}" olddefconfig
+          make -j$(nproc) "${MAKE_FLAGS[@]}" all
 
-          # 🔨 Build kernel
-          make -j$(nproc) "${MAKE_FLAGS[@]}"
-
-          # 🔨 Build and install modules to a staging area
-          make -j$(nproc) "${MAKE_FLAGS[@]}" modules
-          make "${MAKE_FLAGS[@]}" modules_install INSTALL_MOD_PATH=../modules_out
-
-          echo "✅ Build completed"
-
-      - name: 📦 Prepare AnyKernel3 (Vendor Modules Method)
+      - name: Prepare AnyKernel3 (Systemless Bypass for EROFS)
         run: |
-          # Add toolchain to path for stripping modules
-          export PATH=$PWD/clang/bin:$PATH
+          # 1. AnyKernel3 Setup for A/B + Header V3
+          # Fix: Block path and is_slot_device as requested
+          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
 
-          # Copy kernel image
-          if [ -f out/arch/arm64/boot/Image ]; then
-            cp out/arch/arm64/boot/Image AnyKernel3/
+          # 2. Add CMDLINE
+          echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3/anykernel.sh
+
+          cp out/arch/arm64/boot/Image AnyKernel3/
+          
+          # 3. Fix: New Module Mapping Path
+          mkdir -p AnyKernel3/modules/vendor/lib/modules/
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
+          
+          # Rename wlan alias
+          if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
+            cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko AnyKernel3/modules/vendor/lib/modules/wlan.ko
           fi
 
-          # Create module directory structure in AnyKernel3
-          mkdir -p AnyKernel3/modules/vendor/lib/modules
+          find AnyKernel3/modules/ -name "*.ko" -exec llvm-strip --strip-unneeded {} \;
 
-          # Copy compiled modules and strip them to save space
-          find modules_out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
-          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
-
-          # 🔥 Create custom anykernel.sh
-          # Note: 'EOF' prevents the runner from trying to expand $home variables
-          cat > AnyKernel3/anykernel.sh << 'EOF'
-# AnyKernel3 Ramdisk Mod Script
-# Cyber Kernel
-
-properties() { '
-kernel.string=Cyber Kernel for Realme 10 Pro 5G
-do.devicecheck=0
-do.modules=1
-do.systemless=0
-do.cleanup=1
-do.cleanuponabort=0
-device.name1=RMX3660
-device.name2=realme 10 Pro 5G
-supported.versions=12-16
-'; }
-
-block=/dev/block/bootdevice/by-name/boot;
-is_slot_device=1;
-ramdisk_compression=auto;
-
-. tools/ak3-core.sh;
-
-ui_print " "
-ui_print "🔥 Flashing Cyber Kernel..."
-ui_print "📦 Installing modules..."
-
-dump_boot;
-
-# Mount vendor partition
-mount_vendor;
-
-# Clean old modules
-rm -rf /vendor/lib/modules/*
-
-# Copy new modules
-cp -rf $home/modules/vendor/lib/modules/* /vendor/lib/modules/
-
-# Fix permissions
-chmod -R 0644 /vendor/lib/modules/*
-chown -R root:root /vendor/lib/modules/*
-
-ui_print "✅ Modules installed successfully"
-
-write_boot;
-
-ui_print "🚀 Flash complete!"
-EOF
-
-          # Create flashable zip
           cd AnyKernel3
-          zip -r9 ../Cyber-Kernel-Final.zip * -x .git* README.md *placeholder
+          zip -r9 ../Cyber-Final-Holi.zip *
 
-      - name: 🚀 Upload Flashable Zip
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-Release
-          path: Cyber-Kernel-Final.zip
+          name: Cyber-Kernel-Official-Match
+          path: ./Cyber-Final-Holi.zip
+
           
