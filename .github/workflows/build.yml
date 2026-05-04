@@ -18,9 +18,10 @@ jobs:
             bc bison build-essential flex git curl \
             libssl-dev libelf-dev libncurses-dev \
             python3 unzip zip cpio \
-            aarch64-linux-gnu-gcc gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi binutils-aarch64-linux-gnu
-
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            binutils-aarch64-linux-gnu \
+            binutils-arm-linux-gnueabi
       # ✅ FIX 1: Use neutron-clang instead of abandoned proton-clang
       - name: Clone Toolchain & AnyKernel
         run: |
