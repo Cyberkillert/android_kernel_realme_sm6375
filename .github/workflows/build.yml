@@ -5,8 +5,7 @@ on:
 
 jobs:
   build:
-    # ✅ FIX: Ubuntu 24.04 has GLIBC 2.38, satisfies neutron-clang
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout source
@@ -26,12 +25,14 @@ jobs:
 
       - name: Clone Toolchain & AnyKernel
         run: |
+          # AOSP prebuilt clang r416183b — built for Android 12, GLIBC 2.17 compatible
           mkdir -p clang
-          cd clang
-          curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
-          chmod +x antman
-          ./antman -S
-          cd ..
+          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz
+          tar -xf clang-r416183b.tar.gz -C clang
+
+          # Sanity check
+          clang/bin/clang --version
+
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
       - name: Build Kernel 5.4 (Match BoardConfig)
