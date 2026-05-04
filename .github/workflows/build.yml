@@ -89,6 +89,10 @@ jobs:
             INSTALL_MOD_STRIP=1 \
             modules_install
 
+          # ✅ FIX: Remove the circular symlinks that cause infinite cp loop
+          find out/modules_staging -type l -name "build" -delete
+          find out/modules_staging -type l -name "source" -delete
+
           echo "=== Built modules ==="
           find out/modules_staging -name "*.ko" | sort
 
@@ -108,7 +112,11 @@ jobs:
 
           mkdir -p AnyKernel3/modules/vendor/lib/modules/
           KVER=$(ls out/modules_staging/lib/modules/)
-          cp -r out/modules_staging/lib/modules/$KVER/. AnyKernel3/modules/vendor/lib/modules/
+
+          # ✅ FIX: Use cp -rP (no symlink follow) then explicitly copy only real files
+          find out/modules_staging/lib/modules/$KVER/ \
+            -maxdepth 1 \( -name "*.ko" -o -name "modules.*" \) \
+            -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
 
           if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
             cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko \
@@ -116,6 +124,9 @@ jobs:
           fi
 
           find AnyKernel3/modules/ -name "*.ko" -exec llvm-strip --strip-debug {} \;
+
+          echo "=== Modules in zip ==="
+          ls AnyKernel3/modules/vendor/lib/modules/
 
           cd AnyKernel3
           zip -r9 ../Cyber-Final-Holi.zip *
