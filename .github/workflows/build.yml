@@ -15,21 +15,27 @@ jobs:
         run: |
           sudo apt update
           sudo apt install -y \
-          bc bison build-essential flex git curl \
-          libssl-dev libelf-dev libncurses-dev \
-          python3 unzip zip cpio
+            bc bison build-essential flex git curl \
+            libssl-dev libelf-dev libncurses-dev \
+            python3 unzip zip cpio \
+            aarch64-linux-gnu-gcc gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi binutils-aarch64-linux-gnu
 
+      # ✅ FIX 1: Use neutron-clang instead of abandoned proton-clang
       - name: Clone Toolchain & AnyKernel
         run: |
-          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+          mkdir -p clang
+          cd clang
+          curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
+          chmod +x antman
+          ./antman -S
+          cd ..
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
       - name: Build Kernel 5.4 (Match BoardConfig)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
-          
-          # Match Official LineageOS naming
           CUSTOM_NAME="-lineageos-Cyber-Holi"
 
           MAKE_FLAGS=(
@@ -47,47 +53,81 @@ jobs:
           make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
           # --- APPLY BOARDCONFIG SPECS ---
-          # 1. Match Page Size
           ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
-          
-          # 2. Disable Security
+
+          # ✅ FIX 2: Remove the MODULE_FORCE_LOAD hack and build modules correctly
+          # Do NOT disable MODVERSIONS — let them match naturally via correct build
+          # Do NOT use MODULE_FORCE_LOAD — it causes instability
           ./scripts/config --file out/.config -d MODULE_SIG
-          ./scripts/config --file out/.config -d MODVERSIONS
-          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
-          
-          # 3. Enable Realme Specific Features
+          ./scripts/config --file out/.config -e CONFIG_MODULES
+          ./scripts/config --file out/.config -e CONFIG_MODULE_UNLOAD
+
+          # Realme specific
           ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
           ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
           make "${MAKE_FLAGS[@]}" olddefconfig
-          make -j$(nproc) "${MAKE_FLAGS[@]}" all
 
-      - name: Prepare AnyKernel3 (Systemless Bypass for EROFS)
+          # ✅ FIX 3: Build kernel + modules explicitly (not just 'all')
+          make -j$(nproc) "${MAKE_FLAGS[@]}"
+          make -j$(nproc) "${MAKE_FLAGS[@]}" modules
+
+      # ✅ FIX 4: Proper modules_install to generate modules.dep, modules.alias etc.
+      - name: Install Modules to Staging
         run: |
-          # 1. AnyKernel3 Setup for A/B + Header V3
-          # Fix: Block path and is_slot_device as requested
+          export PATH=$PWD/clang/bin:$PATH
+          CUSTOM_NAME="-lineageos-Cyber-Holi"
+
+          MAKE_FLAGS=(
+            ARCH=arm64
+            O=out
+            CC=clang
+            LLVM=1
+            LLVM_IAS=1
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            LOCALVERSION=$CUSTOM_NAME
+          )
+
+          mkdir -p out/modules_staging
+
+          # This generates modules.dep, modules.alias, modules.softdep — CRITICAL
+          make "${MAKE_FLAGS[@]}" \
+            INSTALL_MOD_PATH=$PWD/out/modules_staging \
+            INSTALL_MOD_STRIP=1 \
+            modules_install
+
+          # Show what was built
+          echo "=== Built modules ==="
+          find out/modules_staging -name "*.ko" | sort
+
+      - name: Prepare AnyKernel3
+        run: |
+          # AnyKernel3 Setup for A/B + Header V3
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3/anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
-          
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
           sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
           sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
 
-          # 2. Add CMDLINE
           echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3/anykernel.sh
 
           cp out/arch/arm64/boot/Image AnyKernel3/
-          
-          # 3. Fix: New Module Mapping Path
+
+          # ✅ FIX 5: Copy full modules_staging output (includes dep/alias files, not just .ko)
           mkdir -p AnyKernel3/modules/vendor/lib/modules/
-          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
-          
+          KVER=$(ls out/modules_staging/lib/modules/)
+          cp -r out/modules_staging/lib/modules/$KVER/. AnyKernel3/modules/vendor/lib/modules/
+
           # Rename wlan alias
           if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
-            cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko AnyKernel3/modules/vendor/lib/modules/wlan.ko
+            cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko \
+               AnyKernel3/modules/vendor/lib/modules/wlan.ko
           fi
 
-          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
+          # ✅ FIX 6: Use llvm-strip from clang toolchain, not host aarch64-linux-gnu-strip
+          export PATH=$PWD/clang/bin:$PATH
+          find AnyKernel3/modules/ -name "*.ko" -exec llvm-strip --strip-debug {} \;
 
           cd AnyKernel3
           zip -r9 ../Cyber-Final-Holi.zip *
@@ -97,4 +137,3 @@ jobs:
         with:
           name: Cyber-Kernel-Official-Match
           path: ./Cyber-Final-Holi.zip
-          
