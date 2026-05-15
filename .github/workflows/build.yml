@@ -2,16 +2,6 @@ name: Build Android Kernel (Cyber-Official-Spec)
 
 on:
   workflow_dispatch:
-    inputs:
-      ROM_TARGET:
-        description: 'Target ROM type'
-        required: true
-        default: 'lineageos'
-        type: choice
-        options:
-          - lineageos
-          - rui7
-          - both
 
 jobs:
   build:
@@ -31,23 +21,24 @@ jobs:
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabi
+            binutils-arm-linux-gnueabi \
+            libxml2-utils  # Required for some DTB tools
 
       - name: Clone Toolchain & AnyKernel
         run: |
           mkdir -p clang
-          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz
-          tar -xf clang-r416183b.tar.gz -C clang
-
-          clang/bin/clang --version
-
+          cd clang
+          curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
+          chmod +x antman
+          ./antman -S
+          cd ..
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel 5.4
+      - name: Build Kernel 5.4 (Holi GKI)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
-          CUSTOM_NAME="-Cyber-Holi"
+          CUSTOM_NAME="-lineageos-Cyber-Holi"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -61,131 +52,27 @@ jobs:
           )
 
           mkdir -p out
-          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
+          # Changed to holi_GKI.config as requested
+          make "${MAKE_FLAGS[@]}" vendor/holi_GKI.config
 
-          # ── Base configs (both ROMs) ──────────────────────────────────
-          ./scripts/config --file out/.config \
-            -e CONFIG_ARM64_4K_PAGES \
-            -d MODULE_SIG \
-            -e CONFIG_MODULES \
-            -e CONFIG_MODULE_UNLOAD \
-            -e CONFIG_OPLUS_CHG \
-            -e CONFIG_SECTION_MISMATCH_WARN_ONLY
-
-          # ── RUI7 / Android 16 stock ROM support ──────────────────────
-          # GKI 2.0 vendor_boot compliance
-          ./scripts/config --file out/.config \
-            -e CONFIG_VENDOR_HOOKS \
-            -e CONFIG_ANDROID_VENDOR_HOOKS
-
-          # RUI7 uses EROFS for system/vendor partitions
-          ./scripts/config --file out/.config \
-            -e CONFIG_EROFS_FS \
-            -e CONFIG_EROFS_FS_XATTR \
-            -e CONFIG_EROFS_FS_POSIX_ACL \
-            -e CONFIG_EROFS_FS_SECURITY \
-            -e CONFIG_EROFS_FS_ZIP
-
-          # Android 16 / RUI7 uses F2FS for userdata
-          ./scripts/config --file out/.config \
-            -e CONFIG_F2FS_FS \
-            -e CONFIG_F2FS_FS_XATTR \
-            -e CONFIG_F2FS_FS_POSIX_ACL \
-            -e CONFIG_F2FS_FS_SECURITY \
-            -e CONFIG_F2FS_FS_ENCRYPTION \
-            -e CONFIG_F2FS_FS_COMPRESSION
-
-          # Hardware-backed encryption (RUI7 enforces this)
-          ./scripts/config --file out/.config \
-            -e CONFIG_CRYPTO_AES \
-            -e CONFIG_CRYPTO_SHA256 \
-            -e CONFIG_CRYPTO_SHA512 \
-            -e CONFIG_CRYPTO_GCM \
-            -e CONFIG_KEYS \
-            -e CONFIG_TRUSTED_KEYS \
-            -e CONFIG_ENCRYPTED_KEYS \
-            -e CONFIG_BLK_INLINE_ENCRYPTION \
-            -e CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK \
-            -e CONFIG_FS_ENCRYPTION \
-            -e CONFIG_FS_ENCRYPTION_INLINE_CRYPT \
-            -e CONFIG_SCSI_UFS_CRYPTO \
-            -e CONFIG_QCOM_ICE
-
-          # Android 16 namespaces & cgroup v2 (RUI7 uses both)
-          ./scripts/config --file out/.config \
-            -e CONFIG_NAMESPACES \
-            -e CONFIG_UTS_NS \
-            -e CONFIG_IPC_NS \
-            -e CONFIG_PID_NS \
-            -e CONFIG_NET_NS \
-            -e CONFIG_CGROUPS \
-            -e CONFIG_CGROUP_FREEZER \
-            -e CONFIG_CGROUP_DEVICE \
-            -e CONFIG_CGROUP_CPUACCT \
-            -e CONFIG_BLK_CGROUP \
-            -e CONFIG_CGROUP_SCHED \
-            -e CONFIG_CGROUP_MEM_RES_CTLR \
-            -e CONFIG_MEMCG \
-            -e CONFIG_MEMCG_SWAP \
-            -e CONFIG_CGROUP_HUGETLB \
-            -e CONFIG_CPUSETS \
-            -e CONFIG_CGROUP_DEBUG \
-            -e CONFIG_SOCK_CGROUP_DATA
-
-          # RUI7 Realme/OPPO-specific drivers
-          ./scripts/config --file out/.config \
-            -e CONFIG_OPLUS_CHG \
-            -e CONFIG_OPLUS_CHG_V2 \
-            -e CONFIG_OPLUS_FEATURE_CHG_BASIC \
-            -e CONFIG_OPLUS_SYSTEM_KERNEL_OPLUS \
-            -e CONFIG_OPLUS_FEATURE_QCOM_PMICWD \
-            -e CONFIG_OPLUS_FEATURE_SHUTDOWN_DETECT \
-            -e CONFIG_OPLUS_FEATURE_HANS_FREEZE
-
-          # RUI7 uses Binder for IPC — ensure full binder support
-          ./scripts/config --file out/.config \
-            -e CONFIG_ANDROID \
-            -e CONFIG_ANDROID_BINDER_IPC \
-            -e CONFIG_ANDROID_BINDERFS \
-            -e CONFIG_ANDROID_BINDER_DEVICES \
-            -e CONFIG_ANDROID_BINDER_IPC_SELFTEST
-
-          # Network / iptables needed by RUI7 network stack
-          ./scripts/config --file out/.config \
-            -e CONFIG_NETFILTER \
-            -e CONFIG_NF_TABLES \
-            -e CONFIG_NFT_COMPAT \
-            -e CONFIG_IP_NF_IPTABLES \
-            -e CONFIG_IP_NF_FILTER \
-            -e CONFIG_IP_NF_NAT \
-            -e CONFIG_IP6_NF_IPTABLES \
-            -e CONFIG_IP6_NF_FILTER \
-            -e CONFIG_IP6_NF_NAT \
-            -e CONFIG_NETFILTER_XT_MATCH_CGROUP \
-            -e CONFIG_NETFILTER_XT_MATCH_QTAGUID
-
-          # USB gadget (RUI7 MTP/ADB)
-          ./scripts/config --file out/.config \
-            -e CONFIG_USB_GADGET \
-            -e CONFIG_USB_CONFIGFS \
-            -e CONFIG_USB_CONFIGFS_F_FS \
-            -e CONFIG_USB_CONFIGFS_F_MTP \
-            -e CONFIG_USB_CONFIGFS_F_PTP \
-            -e CONFIG_USB_CONFIGFS_F_ACC \
-            -e CONFIG_USB_CONFIGFS_F_AUDIO_SRC \
-            -e CONFIG_USB_CONFIGFS_UEVENT \
-            -e CONFIG_USB_CONFIGFS_F_UAC2 \
-            -e CONFIG_USB_CONFIGFS_F_MIDI
+          # --- APPLY BOARDCONFIG SPECS ---
+          ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
+          ./scripts/config --file out/.config -d MODULE_SIG
+          ./scripts/config --file out/.config -e CONFIG_MODULES
+          ./scripts/config --file out/.config -e CONFIG_MODULE_UNLOAD
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
           make "${MAKE_FLAGS[@]}" olddefconfig
+
+          # Build kernel, modules, and DTBS (Required for DTBO)
           make -j$(nproc) "${MAKE_FLAGS[@]}"
           make -j$(nproc) "${MAKE_FLAGS[@]}" modules
+          make -j$(nproc) "${MAKE_FLAGS[@]}" dtbs
 
       - name: Install Modules to Staging
         run: |
           export PATH=$PWD/clang/bin:$PATH
-          CUSTOM_NAME="-Cyber-Holi"
-
           MAKE_FLAGS=(
             ARCH=arm64
             O=out
@@ -194,105 +81,62 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LOCALVERSION=$CUSTOM_NAME
+            LOCALVERSION="-lineageos-Cyber-Holi"
           )
 
           mkdir -p out/modules_staging
-
           make "${MAKE_FLAGS[@]}" \
             INSTALL_MOD_PATH=$PWD/out/modules_staging \
             INSTALL_MOD_STRIP=1 \
             modules_install
 
-          find out/modules_staging -type l -name "build" -delete
-          find out/modules_staging -type l -name "source" -delete
-
-          echo "=== Built modules ==="
-          find out/modules_staging -name "*.ko" | sort
-
-      - name: Package — LineageOS zip
-        if: ${{ github.event.inputs.ROM_TARGET == 'lineageos' || github.event.inputs.ROM_TARGET == 'both' }}
+      - name: Prepare AnyKernel3 & DTBO
         run: |
-          export PATH=$PWD/clang/bin:$PATH
-          cp -r AnyKernel3 AnyKernel3-LOS
+          # Setup AnyKernel script
+          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
 
-          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3-LOS/anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/g'                   AnyKernel3-LOS/anykernel.sh
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g'                   AnyKernel3-LOS/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g'                           AnyKernel3-LOS/anykernel.sh
-          sed -i 's/do.systemless=0/do.systemless=1/g'                     AnyKernel3-LOS/anykernel.sh
+          # Add command line flags
+          echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3/anykernel.sh
 
-          echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3-LOS/anykernel.sh
+          # Copy Kernel Image
+          cp out/arch/arm64/boot/Image AnyKernel3/
 
-          cp out/arch/arm64/boot/Image AnyKernel3-LOS/
-
-          mkdir -p AnyKernel3-LOS/modules/vendor/lib/modules/
-          KVER=$(ls out/modules_staging/lib/modules/)
-          find out/modules_staging/lib/modules/$KVER/ \
-            -maxdepth 1 \( -name "*.ko" -o -name "modules.*" \) \
-            -exec cp {} AnyKernel3-LOS/modules/vendor/lib/modules/ \;
-
-          if [ -f AnyKernel3-LOS/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
-            cp AnyKernel3-LOS/modules/vendor/lib/modules/qca_cld3_wlan.ko \
-               AnyKernel3-LOS/modules/vendor/lib/modules/wlan.ko
+          # --- DTBO HANDLING ---
+          # Look for dtbo.img in the output directory
+          if [ -f out/arch/arm64/boot/dtbo.img ]; then
+            cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+          else
+            # If the build system produces individual .dtbo files, they usually need to be merged.
+            # Most modern Holi kernels will output a single dtbo.img if 'make dtbs' is called.
+            echo "dtbo.img not found! Searching for dtbo directory..."
+            find out/arch/arm64/boot/dts/ -name "*.dtbo" -exec cp {} AnyKernel3/ \;
           fi
 
-          find AnyKernel3-LOS/modules/ -name "*.ko" \
-            -exec llvm-strip --strip-debug {} \;
-
-          cd AnyKernel3-LOS
-          zip -r9 ../Cyber-LineageOS-Holi.zip *
-
-      - name: Package — RUI7 / Android 16 Stock zip
-        if: ${{ github.event.inputs.ROM_TARGET == 'rui7' || github.event.inputs.ROM_TARGET == 'both' }}
-        run: |
-          export PATH=$PWD/clang/bin:$PATH
-          cp -r AnyKernel3 AnyKernel3-RUI7
-
-          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3-RUI7/anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/g'                   AnyKernel3-RUI7/anykernel.sh
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g'                   AnyKernel3-RUI7/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g'                           AnyKernel3-RUI7/anykernel.sh
-          # RUI7 stock = NOT systemless (uses stock vendor/system directly)
-          sed -i 's/do.systemless=1/do.systemless=0/g'                     AnyKernel3-RUI7/anykernel.sh
-
-          # RUI7 cmdline — keeps stock SELinux enforcing, drops kpti=off,
-          # adds androidboot.selinux=enforcing and oplus-specific params
-          cat >> AnyKernel3-RUI7/anykernel.sh << 'EOF'
-          cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 androidboot.selinux=enforcing kpti=off
-          EOF
-
-          cp out/arch/arm64/boot/Image AnyKernel3-RUI7/
-
-          mkdir -p AnyKernel3-RUI7/modules/vendor/lib/modules/
+          # Copy Modules
+          mkdir -p AnyKernel3/modules/vendor/lib/modules/
           KVER=$(ls out/modules_staging/lib/modules/)
-          find out/modules_staging/lib/modules/$KVER/ \
-            -maxdepth 1 \( -name "*.ko" -o -name "modules.*" \) \
-            -exec cp {} AnyKernel3-RUI7/modules/vendor/lib/modules/ \;
+          cp -r out/modules_staging/lib/modules/$KVER/. AnyKernel3/modules/vendor/lib/modules/
 
-          if [ -f AnyKernel3-RUI7/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
-            cp AnyKernel3-RUI7/modules/vendor/lib/modules/qca_cld3_wlan.ko \
-               AnyKernel3-RUI7/modules/vendor/lib/modules/wlan.ko
+          # Rename wlan alias
+          if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
+            cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko \
+               AnyKernel3/modules/vendor/lib/modules/wlan.ko
           fi
 
-          # RUI7: do NOT strip modules — stock ROM verifies them
-          # Only strip debug symbols, keep the rest intact
-          find AnyKernel3-RUI7/modules/ -name "*.ko" \
-            -exec llvm-strip --strip-debug {} \;
+          # Strip debug info
+          export PATH=$PWD/clang/bin:$PATH
+          find AnyKernel3/modules/ -name "*.ko" -exec llvm-strip --strip-debug {} \;
 
-          cd AnyKernel3-RUI7
-          zip -r9 ../Cyber-RUI7-Stock-Holi.zip *
+          cd AnyKernel3
+          zip -r9 ../Cyber-Final-Holi-GKI.zip *
 
-      - name: Upload LineageOS Artifact
-        if: ${{ github.event.inputs.ROM_TARGET == 'lineageos' || github.event.inputs.ROM_TARGET == 'both' }}
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-LineageOS
-          path: ./Cyber-LineageOS-Holi.zip
-
-      - name: Upload RUI7 Stock Artifact
-        if: ${{ github.event.inputs.ROM_TARGET == 'rui7' || github.event.inputs.ROM_TARGET == 'both' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: Cyber-Kernel-RUI7-Stock
-          path: ./Cyber-RUI7-Stock-Holi.zip
+          name: Cyber-Kernel-Holi-GKI
+          path: ./Cyber-Final-Holi-GKI.zip
+          
