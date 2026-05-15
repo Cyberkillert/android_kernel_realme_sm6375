@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Official-Spec)
+name: Build Android Kernel (Cyber-Official-GKI)
 
 on:
   workflow_dispatch:
@@ -22,10 +22,11 @@ jobs:
             gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu \
             binutils-arm-linux-gnueabi \
-            libxml2-utils  # Required for some DTB tools
+            libxml2-utils
 
       - name: Clone Toolchain & AnyKernel
         run: |
+          # Use Neutron Clang (highly optimized for Snapdragon)
           mkdir -p clang
           cd clang
           curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
@@ -38,7 +39,9 @@ jobs:
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
-          CUSTOM_NAME="-lineageos-Cyber-Holi"
+          
+          # Custom label for the About Phone screen
+          CUSTOM_NAME="-Cyber-Holi-GKI"
 
           MAKE_FLAGS=(
             ARCH=arm64
@@ -52,10 +55,10 @@ jobs:
           )
 
           mkdir -p out
-          # Changed to holi_GKI.config as requested
+          # Using the GKI config as requested
           make "${MAKE_FLAGS[@]}" vendor/holi_GKI.config
 
-          # --- APPLY BOARDCONFIG SPECS ---
+          # Apply mandatory Realme/GKI fixes
           ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
           ./scripts/config --file out/.config -d MODULE_SIG
           ./scripts/config --file out/.config -e CONFIG_MODULES
@@ -65,12 +68,10 @@ jobs:
 
           make "${MAKE_FLAGS[@]}" olddefconfig
 
-          # Build kernel, modules, and DTBS (Required for DTBO)
-          make -j$(nproc) "${MAKE_FLAGS[@]}"
-          make -j$(nproc) "${MAKE_FLAGS[@]}" modules
-          make -j$(nproc) "${MAKE_FLAGS[@]}" dtbs
+          # Build Image, DTBs (for DTBO), and Modules
+          make -j$(nproc) "${MAKE_FLAGS[@]}" Image dtbs modules
 
-      - name: Install Modules to Staging
+      - name: Install & Strip Modules
         run: |
           export PATH=$PWD/clang/bin:$PATH
           MAKE_FLAGS=(
@@ -81,7 +82,6 @@ jobs:
             LLVM_IAS=1
             CROSS_COMPILE=aarch64-linux-gnu-
             CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LOCALVERSION="-lineageos-Cyber-Holi"
           )
 
           mkdir -p out/modules_staging
@@ -90,53 +90,40 @@ jobs:
             INSTALL_MOD_STRIP=1 \
             modules_install
 
-      - name: Prepare AnyKernel3 & DTBO
+          # Use llvm-strip from the toolchain for maximum compatibility
+          find out/modules_staging -name "*.ko" -exec llvm-strip --strip-debug {} \;
+
+      - name: Prepare AnyKernel3 Package
         run: |
-          # Setup AnyKernel script
-          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3/anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
-
-          # Add command line flags
-          echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3/anykernel.sh
-
-          # Copy Kernel Image
+          # 1. Image and DTBO
           cp out/arch/arm64/boot/Image AnyKernel3/
-
-          # --- DTBO HANDLING ---
-          # Look for dtbo.img in the output directory
+          
           if [ -f out/arch/arm64/boot/dtbo.img ]; then
             cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-          else
-            # If the build system produces individual .dtbo files, they usually need to be merged.
-            # Most modern Holi kernels will output a single dtbo.img if 'make dtbs' is called.
-            echo "dtbo.img not found! Searching for dtbo directory..."
-            find out/arch/arm64/boot/dts/ -name "*.dtbo" -exec cp {} AnyKernel3/ \;
           fi
 
-          # Copy Modules
+          # 2. Kernel Modules
           mkdir -p AnyKernel3/modules/vendor/lib/modules/
           KVER=$(ls out/modules_staging/lib/modules/)
           cp -r out/modules_staging/lib/modules/$KVER/. AnyKernel3/modules/vendor/lib/modules/
 
-          # Rename wlan alias
+          # 3. Handle WLAN alias (common for Realme SM6375)
           if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
-            cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko \
-               AnyKernel3/modules/vendor/lib/modules/wlan.ko
+             cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko AnyKernel3/modules/vendor/lib/modules/wlan.ko
           fi
 
-          # Strip debug info
-          export PATH=$PWD/clang/bin:$PATH
-          find AnyKernel3/modules/ -name "*.ko" -exec llvm-strip --strip-debug {} \;
-
+          # 4. Configure anykernel.sh for Realme 10 Pro
           cd AnyKernel3
-          zip -r9 ../Cyber-Final-Holi-GKI.zip *
+          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' anykernel.sh
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
+          
+          # Zip it up
+          zip -r9 ../Cyber-Holi-GKI-Build.zip *
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Cyber-Kernel-Holi-GKI
-          path: ./Cyber-Final-Holi-GKI.zip
+          name: Cyber-Kernel-Holi
+          path: ./Cyber-Holi-GKI-Build.zip
           
