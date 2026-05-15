@@ -1,11 +1,11 @@
 name: Build Android Kernel (Cyber-Official-GKI)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # Allows manual trigger from the Actions tab
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-24.04 # ✅ Uses the newer runner to fix GLIBC errors
 
     steps:
       - name: Checkout source
@@ -26,21 +26,21 @@ jobs:
 
       - name: Clone Toolchain & AnyKernel
         run: |
-          # Use Neutron Clang (highly optimized for Snapdragon)
+          # Setup Neutron Clang
           mkdir -p clang
           cd clang
           curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
           chmod +x antman
           ./antman -S
           cd ..
+          # Setup AnyKernel3 for packaging
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel 5.4 (Holi GKI)
+      - name: Build Kernel (Holi GKI)
         run: |
           export PATH=$PWD/clang/bin:$PATH
           export ARCH=arm64
           
-          # Custom label for the About Phone screen
           CUSTOM_NAME="-Cyber-Holi-GKI"
 
           MAKE_FLAGS=(
@@ -55,10 +55,10 @@ jobs:
           )
 
           mkdir -p out
-          # Using the GKI config as requested
+          # Load the GKI configuration
           make "${MAKE_FLAGS[@]}" vendor/holi_GKI.config
 
-          # Apply mandatory Realme/GKI fixes
+          # Apply standard Realme & GKI stability flags
           ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
           ./scripts/config --file out/.config -d MODULE_SIG
           ./scripts/config --file out/.config -e CONFIG_MODULES
@@ -68,57 +68,40 @@ jobs:
 
           make "${MAKE_FLAGS[@]}" olddefconfig
 
-          # Build Image, DTBs (for DTBO), and Modules
+          # Compile Image, DTBs (for DTBO), and Modules
           make -j$(nproc) "${MAKE_FLAGS[@]}" Image dtbs modules
 
-      - name: Install & Strip Modules
+      - name: Process Modules
         run: |
           export PATH=$PWD/clang/bin:$PATH
-          MAKE_FLAGS=(
-            ARCH=arm64
-            O=out
-            CC=clang
-            LLVM=1
-            LLVM_IAS=1
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          )
-
+          
+          # Create temporary staging for modules
           mkdir -p out/modules_staging
-          make "${MAKE_FLAGS[@]}" \
+          make ARCH=arm64 O=out \
             INSTALL_MOD_PATH=$PWD/out/modules_staging \
             INSTALL_MOD_STRIP=1 \
             modules_install
 
-          # Use llvm-strip from the toolchain for maximum compatibility
+          # Strip debug symbols to reduce size
           find out/modules_staging -name "*.ko" -exec llvm-strip --strip-debug {} \;
 
-      - name: Prepare AnyKernel3 Package
+      - name: Package with AnyKernel3
         run: |
-          # 1. Image and DTBO
+          # 1. Copy Kernel and DTBO
           cp out/arch/arm64/boot/Image AnyKernel3/
-          
-          if [ -f out/arch/arm64/boot/dtbo.img ]; then
-            cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-          fi
+          [ -f out/arch/arm64/boot/dtbo.img ] && cp out/arch/arm64/boot/dtbo.img AnyKernel3/
 
-          # 2. Kernel Modules
+          # 2. Copy Modules
           mkdir -p AnyKernel3/modules/vendor/lib/modules/
           KVER=$(ls out/modules_staging/lib/modules/)
           cp -r out/modules_staging/lib/modules/$KVER/. AnyKernel3/modules/vendor/lib/modules/
 
-          # 3. Handle WLAN alias (common for Realme SM6375)
-          if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
-             cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko AnyKernel3/modules/vendor/lib/modules/wlan.ko
-          fi
-
-          # 4. Configure anykernel.sh for Realme 10 Pro
+          # 3. Configure anykernel.sh for Realme 10 Pro
           cd AnyKernel3
           sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' anykernel.sh
           sed -i 's/is_slot_device=0/is_slot_device=1/g' anykernel.sh
           sed -i 's/do.devicecheck=1/do.devicecheck=0/g' anykernel.sh
           
-          # Zip it up
           zip -r9 ../Cyber-Holi-GKI-Build.zip *
 
       - name: Upload Artifact
@@ -126,4 +109,3 @@ jobs:
         with:
           name: Cyber-Kernel-Holi
           path: ./Cyber-Holi-GKI-Build.zip
-          
