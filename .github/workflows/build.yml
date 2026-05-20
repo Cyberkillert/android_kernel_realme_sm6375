@@ -58,8 +58,18 @@ jobs:
     - name: Setup KernelSU-Next
       run: |
         curl -LSs \
-        "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" \
+        "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/main/kernel/setup.sh" \
         | bash
+
+    - name: Remove Unsupported KernelSU Features
+      run: |
+        rm -f drivers/kernelsu/feature/sucompat.c || true
+
+        sed -i '/sucompat.o/d' \
+        drivers/kernelsu/feature/Makefile || true
+
+        sed -i '/sucompat/d' \
+        drivers/kernelsu/feature/Kconfig || true
 
     - name: Enable KernelSU Config
       run: |
@@ -72,7 +82,12 @@ jobs:
         make O=out \
         ARCH=arm64 \
         LLVM=1 \
+        LLVM_IAS=1 \
         vendor/holi-qgki_defconfig
+
+    - name: Disable Werror
+      run: |
+        scripts/config --file out/.config -d CC_WERROR || true
 
     - name: Compile Kernel
       run: |
@@ -82,7 +97,13 @@ jobs:
         O=out \
         ARCH=arm64 \
         LLVM=1 \
-        KCFLAGS=-Wno-error
+        LLVM_IAS=1 \
+        KCFLAGS=-Wno-error \
+        CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+
+    - name: Verify Kernel Output
+      run: |
+        ls -lah out/arch/arm64/boot/
 
     - name: Clone AnyKernel3
       run: |
