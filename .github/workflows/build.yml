@@ -1,4 +1,4 @@
-name: Build 5.4 QGKI KernelSU SUSFS
+name: Build Realme SM6375 KernelSU
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ jobs:
 
     steps:
 
-    - name: Checkout
+    - name: Checkout Repository
       uses: actions/checkout@v4
 
     - name: Install Dependencies
@@ -55,43 +55,17 @@ jobs:
         https://github.com/kdrag0n/proton-clang \
         clang
 
-    - name: Clone Kernel Source
-      run: |
-        git clone --depth=1 \
-        https://github.com/LineageOS/android_kernel_realme_sm6375 \
-        -b lineage-23.0 \
-        kernel
-
-    - name: Add KernelSU-Next
-      working-directory: kernel
+    - name: Setup KernelSU-Next
       run: |
         curl -LSs \
         "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh" \
-        | bash -s next
+        | bash
 
-    - name: Clone SUSFS
+    - name: Enable KernelSU Config
       run: |
-        git clone https://gitlab.com/simonpunk/susfs4ksu.git susfs
-
-    - name: Apply SUSFS 5.4 Patches
-      working-directory: kernel
-      run: |
-        cp ../susfs/kernel_patches/50_add_susfs_in_kernel-5.4.patch .
-
-        git apply --reject --whitespace=fix \
-        50_add_susfs_in_kernel-5.4.patch || true
-
-    - name: Enable KernelSU
-      working-directory: kernel
-      run: |
-        echo "CONFIG_KSU=y" \
-        >> arch/arm64/configs/vendor/holi-qgki_defconfig
-
-        echo "CONFIG_KSU_SUSFS=y" \
-        >> arch/arm64/configs/vendor/holi-qgki_defconfig
+        echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/holi-qgki_defconfig
 
     - name: Build Defconfig
-      working-directory: kernel
       run: |
         export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
 
@@ -101,32 +75,38 @@ jobs:
         vendor/holi-qgki_defconfig
 
     - name: Compile Kernel
-      working-directory: kernel
       run: |
         export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
 
         make -j$(nproc --all) \
         O=out \
         ARCH=arm64 \
-        LLVM=1
+        LLVM=1 \
+        KCFLAGS=-Wno-error
 
     - name: Clone AnyKernel3
       run: |
         git clone --depth=1 \
         https://github.com/osm0sis/AnyKernel3
 
-    - name: Copy Kernel
+    - name: Copy Kernel Image
       run: |
-        cp kernel/out/arch/arm64/boot/Image \
+        cp out/arch/arm64/boot/Image \
         AnyKernel3/
 
-    - name: Create ZIP
+    - name: Create Flashable ZIP
       working-directory: AnyKernel3
       run: |
-        zip -r9 KernelSU-SUSFS-5.4.zip *
+        zip -r9 Realme-SM6375-KernelSU.zip *
 
-    - name: Upload ZIP
+    - name: Upload Flashable ZIP
       uses: actions/upload-artifact@v4
       with:
-        name: KernelSU-SUSFS-5.4
-        path: AnyKernel3/KernelSU-SUSFS-5.4.zip
+        name: Realme-SM6375-KernelSU
+        path: AnyKernel3/Realme-SM6375-KernelSU.zip
+
+    - name: Upload Kernel Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Image
+        path: out/arch/arm64/boot/Image
