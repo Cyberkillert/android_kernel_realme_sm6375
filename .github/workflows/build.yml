@@ -57,9 +57,19 @@ jobs:
 
     - name: Setup KernelSU-Next
       run: |
-        curl -LSs \
-        "https://raw.githubusercontent.com/rifsxd/KernelSU-Next/main/kernel/setup.sh" \
-        | bash
+        git clone --depth=1 \
+        https://github.com/rifsxd/KernelSU-Next.git \
+        kernelsu
+
+        cd kernelsu
+        git checkout next
+        cd ..
+
+        ln -sf ../kernelsu/kernel drivers/kernelsu
+
+        echo 'obj-y += kernelsu/' >> drivers/Makefile
+
+        echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
 
     - name: Remove Unsupported KernelSU Features
       run: |
@@ -73,7 +83,8 @@ jobs:
 
     - name: Enable KernelSU Config
       run: |
-        echo "CONFIG_KSU=y" >> arch/arm64/configs/vendor/holi-qgki_defconfig
+        echo "CONFIG_KSU=y" \
+        >> arch/arm64/configs/vendor/holi-qgki_defconfig
 
     - name: Build Defconfig
       run: |
