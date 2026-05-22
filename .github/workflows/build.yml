@@ -76,18 +76,19 @@ jobs:
           echo " PATCH CONFIG "
           echo "========================="
 
-          # Force section mismatch warnings only
+          # Section mismatch warning only
           if grep -q "# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set" out/.config; then
             sed -i 's/# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set/CONFIG_SECTION_MISMATCH_WARN_ONLY=y/g' out/.config
           else
             echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> out/.config
           fi
 
-          # Modules
+          # Enable modules
           if grep -q "# CONFIG_MODULES is not set" out/.config; then
             sed -i 's/# CONFIG_MODULES is not set/CONFIG_MODULES=y/g' out/.config
           fi
 
+          # Enable module unload
           if grep -q "# CONFIG_MODULE_UNLOAD is not set" out/.config; then
             sed -i 's/# CONFIG_MODULE_UNLOAD is not set/CONFIG_MODULE_UNLOAD=y/g' out/.config
           fi
@@ -142,7 +143,7 @@ jobs:
       - name: Prepare AnyKernel3
         run: |
           echo "========================="
-          echo " COPYING FILES "
+          echo " COPYING IMAGE "
           echo "========================="
 
           cp out/arch/arm64/boot/Image AnyKernel3/
@@ -162,8 +163,19 @@ jobs:
 
           KVER=$(ls out/modules_staging/lib/modules/)
 
-          cp -r out/modules_staging/lib/modules/$KVER/* \
-            AnyKernel3/modules/vendor/lib/modules/
+          # Copy only .ko files
+          find out/modules_staging/lib/modules/$KVER/ -name "*.ko" \
+            -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
+
+          # Copy module metadata
+          cp out/modules_staging/lib/modules/$KVER/modules.* \
+            AnyKernel3/modules/vendor/lib/modules/ || true
+
+          echo "========================="
+          echo " REMOVE SYMLINKS "
+          echo "========================="
+
+          find AnyKernel3 -type l -delete
 
           echo "========================="
           echo " STRIP MODULES "
@@ -173,6 +185,12 @@ jobs:
 
           find AnyKernel3/modules/ -name "*.ko" \
             -exec llvm-strip --strip-debug {} \;
+
+          echo "========================="
+          echo " VERIFY MODULES "
+          echo "========================="
+
+          find AnyKernel3/modules -name "*.ko"
 
           echo "========================="
           echo " ANYKERNEL CONFIG "
