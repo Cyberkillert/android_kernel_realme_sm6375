@@ -1,4 +1,4 @@
-name: Build Realme SM6375 KernelSU
+name: Build Android Kernel Holi Official
 
 on:
   workflow_dispatch:
@@ -8,137 +8,136 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
 
-    - name: Checkout Repository
-      uses: actions/checkout@v4
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            bc bison build-essential flex git curl \
+            libssl-dev libelf-dev libncurses-dev \
+            python3 unzip zip cpio rsync \
+            gcc-aarch64-linux-gnu \
+            gcc-arm-linux-gnueabi \
+            binutils-aarch64-linux-gnu \
+            binutils-arm-linux-gnueabi \
+            device-tree-compiler
 
-    - name: Install Dependencies
-      run: |
-        sudo apt update
+      - name: Clone Neutron Clang + AnyKernel3
+        run: |
+          mkdir clang
+          cd clang
 
-        sudo apt install -y \
-        bc \
-        bison \
-        build-essential \
-        ccache \
-        clang \
-        curl \
-        flex \
-        g++-multilib \
-        gcc-multilib \
-        git \
-        gnupg \
-        gperf \
-        imagemagick \
-        lib32ncurses5-dev \
-        lib32readline-dev \
-        lib32z1-dev \
-        libelf-dev \
-        liblz4-tool \
-        libsdl1.2-dev \
-        libssl-dev \
-        libxml2 \
-        libxml2-utils \
-        lld \
-        lzop \
-        pngcrush \
-        rsync \
-        schedtool \
-        squashfs-tools \
-        xsltproc \
-        zip \
-        zlib1g-dev
+          curl -LO https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
+          chmod +x antman
+          ./antman -S
 
-    - name: Clone Proton Clang
-      run: |
-        git clone --depth=1 \
-        https://github.com/kdrag0n/proton-clang \
-        clang
+          cd ..
 
-    - name: Setup KernelSU-Next
-      run: |
-        git clone --depth=1 \
-        https://github.com/rifsxd/KernelSU-Next.git \
-        kernelsu
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-        cd kernelsu
-        git checkout next
-        cd ..
+      - name: Build Kernel + DTBO + Modules
+        run: |
+          export PATH=$PWD/clang/bin:$PATH
 
-        ln -sf ../kernelsu/kernel drivers/kernelsu
+          export ARCH=arm64
+          export SUBARCH=arm64
 
-        echo 'obj-y += kernelsu/' >> drivers/Makefile
+          KERNEL_NAME="-Cyber-Holi"
 
-        echo 'source "drivers/kernelsu/Kconfig"' >> drivers/Kconfig
+          MAKE_ARGS="
+          ARCH=arm64
+          O=out
+          CC=clang
+          LLVM=1
+          LLVM_IAS=1
+          CROSS_COMPILE=aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          LOCALVERSION=${KERNEL_NAME}
+          "
 
-    - name: Remove Unsupported KernelSU Features
-      run: |
-        rm -f drivers/kernelsu/feature/sucompat.c || true
+          mkdir -p out
 
-        sed -i '/sucompat.o/d' \
-        drivers/kernelsu/feature/Makefile || true
+          make $MAKE_ARGS vendor/holi-qgki_defconfig
 
-        sed -i '/sucompat/d' \
-        drivers/kernelsu/feature/Kconfig || true
+          # Required
+          ./scripts/config --file out/.config -e CONFIG_MODULES
+          ./scripts/config --file out/.config -e CONFIG_MODULE_UNLOAD
+          ./scripts/config --file out/.config -d CONFIG_MODULE_SIG
 
-    - name: Enable KernelSU Config
-      run: |
-        echo "CONFIG_KSU=y" \
-        >> arch/arm64/configs/vendor/holi-qgki_defconfig
+          # Qualcomm
+          ./scripts/config --file out/.config -e CONFIG_BUILD_ARM64_DT_OVERLAY
 
-    - name: Build Defconfig
-      run: |
-        export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+          # Realme/Oplus
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
 
-        make O=out \
-        ARCH=arm64 \
-        LLVM=1 \
-        LLVM_IAS=1 \
-        vendor/holi-qgki_defconfig
+          make $MAKE_ARGS olddefconfig
 
-    - name: Disable Werror
-      run: |
-        scripts/config --file out/.config -d CC_WERROR || true
+          # Build everything
+          make -j$(nproc) $MAKE_ARGS Image dtbs dtbo.img modules
 
-    - name: Compile Kernel
-      run: |
-        export PATH=$GITHUB_WORKSPACE/clang/bin:$PATH
+      - name: Install Modules Properly
+        run: |
+          export PATH=$PWD/clang/bin:$PATH
 
-        make -j$(nproc --all) \
-        O=out \
-        ARCH=arm64 \
-        LLVM=1 \
-        LLVM_IAS=1 \
-        KCFLAGS=-Wno-error \
-        CONFIG_SECTION_MISMATCH_WARN_ONLY=y
+          MAKE_ARGS="
+          ARCH=arm64
+          O=out
+          CC=clang
+          LLVM=1
+          LLVM_IAS=1
+          CROSS_COMPILE=aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          "
 
-    - name: Verify Kernel Output
-      run: |
-        ls -lah out/arch/arm64/boot/
+          mkdir -p out/modules_staging
 
-    - name: Clone AnyKernel3
-      run: |
-        git clone --depth=1 \
-        https://github.com/osm0sis/AnyKernel3
+          make $MAKE_ARGS \
+            INSTALL_MOD_PATH=$PWD/out/modules_staging \
+            INSTALL_MOD_STRIP=1 \
+            modules_install
 
-    - name: Copy Kernel Image
-      run: |
-        cp out/arch/arm64/boot/Image \
-        AnyKernel3/
+          echo "=== BUILT MODULES ==="
+          find out/modules_staging -name "*.ko"
 
-    - name: Create Flashable ZIP
-      working-directory: AnyKernel3
-      run: |
-        zip -r9 Realme-SM6375-KernelSU.zip *
+      - name: Prepare AnyKernel3
+        run: |
+          cp out/arch/arm64/boot/Image AnyKernel3/
 
-    - name: Upload Flashable ZIP
-      uses: actions/upload-artifact@v4
-      with:
-        name: Realme-SM6375-KernelSU
-        path: AnyKernel3/Realme-SM6375-KernelSU.zip
+          # DTBO
+          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
 
-    - name: Upload Kernel Image
-      uses: actions/upload-artifact@v4
-      with:
-        name: Kernel-Image
-        path: out/arch/arm64/boot/Image
+          # DTB
+          find out/arch/arm64/boot/dts/ -name "*.dtb" -exec cat {} + > AnyKernel3/dtb
+
+          # Modules
+          mkdir -p AnyKernel3/modules/vendor/lib/modules/
+
+          KVER=$(ls out/modules_staging/lib/modules/)
+
+          cp -r out/modules_staging/lib/modules/$KVER/* \
+            AnyKernel3/modules/vendor/lib/modules/
+
+          # Strip modules
+          export PATH=$PWD/clang/bin:$PATH
+
+          find AnyKernel3/modules -name "*.ko" \
+            -exec llvm-strip --strip-debug {} \;
+
+          # AnyKernel configs
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+
+          # Enable DTBO flashing
+          echo 'dtbo=1' >> AnyKernel3/anykernel.sh
+
+          cd AnyKernel3
+          zip -r9 ../Cyber-Holi-Kernel.zip *
+
+      - name: Upload Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cyber-Holi-Kernel
+          path: Cyber-Holi-Kernel.zip
