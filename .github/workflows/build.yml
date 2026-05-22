@@ -5,7 +5,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout Source
@@ -14,30 +14,35 @@ jobs:
       - name: Install Dependencies
         run: |
           sudo apt update
+
           sudo apt install -y \
-            bc bison build-essential flex git curl \
-            libssl-dev libelf-dev libncurses-dev \
-            python3 unzip zip cpio rsync \
+            bc \
+            bison \
+            build-essential \
+            flex \
+            git \
+            curl \
+            libssl-dev \
+            libelf-dev \
+            libncurses-dev \
+            python3 \
+            unzip \
+            zip \
+            cpio \
+            rsync \
+            device-tree-compiler \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabi \
-            device-tree-compiler
+            binutils-arm-linux-gnueabi
 
-      - name: Clone Neutron Clang + AnyKernel3
+      - name: Clone Proton Clang + AnyKernel3
         run: |
-          mkdir clang
-          cd clang
-
-          curl -LO https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman
-          chmod +x antman
-          ./antman -S
-
-          cd ..
+          git clone --depth=1 https://gitlab.com/LeCmnGend/proton-clang clang
 
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel + DTBO + Modules
+      - name: Build Kernel + DTBO + DTBS + Modules
         run: |
           export PATH=$PWD/clang/bin:$PATH
 
@@ -59,23 +64,45 @@ jobs:
 
           mkdir -p out
 
+          echo "========================="
+          echo " USING DEFCONFIG "
+          echo "========================="
+
           make $MAKE_ARGS vendor/holi-qgki_defconfig
 
-          # Required
-          ./scripts/config --file out/.config -e CONFIG_MODULES
-          ./scripts/config --file out/.config -e CONFIG_MODULE_UNLOAD
-          ./scripts/config --file out/.config -d CONFIG_MODULE_SIG
+          echo "========================="
+          echo " CONFIG PATCHES "
+          echo "========================="
 
-          # Qualcomm
-          ./scripts/config --file out/.config -e CONFIG_BUILD_ARM64_DT_OVERLAY
+          ./scripts/config --file out/.config \
+            -e CONFIG_MODULES
 
-          # Realme/Oplus
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+          ./scripts/config --file out/.config \
+            -e CONFIG_MODULE_UNLOAD
+
+          ./scripts/config --file out/.config \
+            -d CONFIG_MODULE_SIG
+
+          ./scripts/config --file out/.config \
+            -e CONFIG_BUILD_ARM64_DT_OVERLAY
+
+          ./scripts/config --file out/.config \
+            -e CONFIG_OPLUS_CHG
+
+          ./scripts/config --file out/.config \
+            -e CONFIG_SECTION_MISMATCH_WARN_ONLY
 
           make $MAKE_ARGS olddefconfig
 
-          # Build everything
-          make -j$(nproc) $MAKE_ARGS Image dtbs dtbo.img modules
+          echo "========================="
+          echo " BUILDING KERNEL "
+          echo "========================="
+
+          make -j$(nproc) $MAKE_ARGS \
+            Image \
+            dtbs \
+            dtbo.img \
+            modules
 
       - name: Install Modules Properly
         run: |
@@ -98,20 +125,35 @@ jobs:
             INSTALL_MOD_STRIP=1 \
             modules_install
 
-          echo "=== BUILT MODULES ==="
+          echo "========================="
+          echo " BUILT MODULES "
+          echo "========================="
+
           find out/modules_staging -name "*.ko"
 
       - name: Prepare AnyKernel3
         run: |
+          echo "========================="
+          echo " COPYING FILES "
+          echo "========================="
+
           cp out/arch/arm64/boot/Image AnyKernel3/
 
-          # DTBO
-          cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+          if [ -f out/arch/arm64/boot/dtbo.img ]; then
+            cp out/arch/arm64/boot/dtbo.img AnyKernel3/
+          fi
 
-          # DTB
-          find out/arch/arm64/boot/dts/ -name "*.dtb" -exec cat {} + > AnyKernel3/dtb
+          echo "========================="
+          echo " BUILD DTB "
+          echo "========================="
 
-          # Modules
+          find out/arch/arm64/boot/dts/ -name "*.dtb" \
+            -exec cat {} + > AnyKernel3/dtb
+
+          echo "========================="
+          echo " COPY MODULES "
+          echo "========================="
+
           mkdir -p AnyKernel3/modules/vendor/lib/modules/
 
           KVER=$(ls out/modules_staging/lib/modules/)
@@ -119,25 +161,44 @@ jobs:
           cp -r out/modules_staging/lib/modules/$KVER/* \
             AnyKernel3/modules/vendor/lib/modules/
 
-          # Strip modules
+          echo "========================="
+          echo " STRIP MODULES "
+          echo "========================="
+
           export PATH=$PWD/clang/bin:$PATH
 
-          find AnyKernel3/modules -name "*.ko" \
+          find AnyKernel3/modules/ -name "*.ko" \
             -exec llvm-strip --strip-debug {} \;
 
-          # AnyKernel configs
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          echo "========================="
+          echo " ANYKERNEL CONFIG "
+          echo "========================="
 
-          # Enable DTBO flashing
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' \
+            AnyKernel3/anykernel.sh
+
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' \
+            AnyKernel3/anykernel.sh
+
+          sed -i 's/do.modules=0/do.modules=1/g' \
+            AnyKernel3/anykernel.sh
+
+          sed -i 's/do.systemless=0/do.systemless=1/g' \
+            AnyKernel3/anykernel.sh
+
           echo 'dtbo=1' >> AnyKernel3/anykernel.sh
 
+          echo "========================="
+          echo " PACKING ZIP "
+          echo "========================="
+
           cd AnyKernel3
+
           zip -r9 ../Cyber-Holi-Kernel.zip *
 
-      - name: Upload Build
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
+
         with:
           name: Cyber-Holi-Kernel
           path: Cyber-Holi-Kernel.zip
