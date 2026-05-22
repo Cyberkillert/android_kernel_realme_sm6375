@@ -73,25 +73,35 @@ jobs:
           make $MAKE_ARGS vendor/holi-qgki_defconfig
 
           echo "========================="
-          echo " CONFIG PATCHES "
+          echo " PATCH CONFIG "
           echo "========================="
 
-          ./scripts/config --file out/.config \
-            -e MODULES
+          # Force section mismatch warnings only
+          if grep -q "# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set" out/.config; then
+            sed -i 's/# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set/CONFIG_SECTION_MISMATCH_WARN_ONLY=y/g' out/.config
+          else
+            echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> out/.config
+          fi
 
-          ./scripts/config --file out/.config \
-            -e MODULE_UNLOAD
+          # Modules
+          if grep -q "# CONFIG_MODULES is not set" out/.config; then
+            sed -i 's/# CONFIG_MODULES is not set/CONFIG_MODULES=y/g' out/.config
+          fi
 
-          ./scripts/config --file out/.config \
-            -d MODULE_SIG
+          if grep -q "# CONFIG_MODULE_UNLOAD is not set" out/.config; then
+            sed -i 's/# CONFIG_MODULE_UNLOAD is not set/CONFIG_MODULE_UNLOAD=y/g' out/.config
+          fi
 
-          ./scripts/config --file out/.config \
-            -e SECTION_MISMATCH_WARN_ONLY
-
-          ./scripts/config --file out/.config \
-            -e OPLUS_CHG
+          # Disable module signature
+          sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' out/.config
 
           make $MAKE_ARGS olddefconfig
+
+          echo "========================="
+          echo " VERIFY CONFIG "
+          echo "========================="
+
+          grep SECTION_MISMATCH_WARN_ONLY out/.config || true
 
           echo "========================="
           echo " BUILDING KERNEL "
