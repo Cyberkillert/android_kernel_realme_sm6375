@@ -38,9 +38,11 @@ jobs:
 
       - name: Clone Proton Clang + AnyKernel3
         run: |
-          git clone --depth=1 https://gitlab.com/LeCmnGend/proton-clang clang
+          git clone --depth=1 \
+            https://gitlab.com/LeCmnGend/proton-clang clang
 
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+          git clone --depth=1 \
+            https://github.com/osm0sis/AnyKernel3
 
       - name: Build Kernel + DTBS + Modules
         run: |
@@ -64,18 +66,36 @@ jobs:
 
           mkdir -p out
 
+          echo "========================="
+          echo " USING DEFCONFIG "
+          echo "========================="
+
           make $MAKE_ARGS vendor/holi-qgki_defconfig
 
-          ./scripts/config --file out/.config \
-            -e CONFIG_MODULES
+          echo "========================="
+          echo " CONFIG PATCHES "
+          echo "========================="
 
           ./scripts/config --file out/.config \
-            -e CONFIG_MODULE_UNLOAD
+            -e MODULES
 
           ./scripts/config --file out/.config \
-            -d CONFIG_MODULE_SIG
+            -e MODULE_UNLOAD
+
+          ./scripts/config --file out/.config \
+            -d MODULE_SIG
+
+          ./scripts/config --file out/.config \
+            -e SECTION_MISMATCH_WARN_ONLY
+
+          ./scripts/config --file out/.config \
+            -e OPLUS_CHG
 
           make $MAKE_ARGS olddefconfig
+
+          echo "========================="
+          echo " BUILDING KERNEL "
+          echo "========================="
 
           make -j$(nproc) $MAKE_ARGS \
             Image \
@@ -116,10 +136,6 @@ jobs:
           echo "========================="
 
           cp out/arch/arm64/boot/Image AnyKernel3/
-
-          if [ -f out/arch/arm64/boot/dtbo.img ]; then
-            cp out/arch/arm64/boot/dtbo.img AnyKernel3/
-          fi
 
           echo "========================="
           echo " BUILD DTB "
@@ -163,8 +179,6 @@ jobs:
 
           sed -i 's/do.systemless=0/do.systemless=1/g' \
             AnyKernel3/anykernel.sh
-
-          echo 'dtbo=1' >> AnyKernel3/anykernel.sh
 
           echo "========================="
           echo " PACKING ZIP "
