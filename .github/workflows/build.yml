@@ -1,4 +1,4 @@
-name: Build Android Kernel (Cyber-Official-Spec)
+name: Build Android Kernel
 
 on:
   workflow_dispatch:
@@ -8,106 +8,61 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y \
-            bc bison build-essential flex git curl \
-            libssl-dev libelf-dev libncurses-dev \
-            python3 unzip zip cpio \
-            gcc-aarch64-linux-gnu \
-            gcc-arm-linux-gnueabi \
-            binutils-aarch64-linux-gnu \
-            binutils-arm-linux-gnueabi
-      - name: Clone Toolchain & AnyKernel
-        run: |
-          # AOSP prebuilt clang r416183b — built for Android 12, GLIBC 2.17 compatible
-          mkdir -p clang
-          wget -q https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/android12-release/clang-r416183b.tar.gz
-          tar -xf clang-r416183b.tar.gz -C clang
-          # Sanity check
-          clang/bin/clang --version
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
-      - name: Build Kernel 5.4 (Match BoardConfig)
-        run: |
-          export PATH=$PWD/clang/bin:$PATH
-          export ARCH=arm64
-          CUSTOM_NAME="-lineageos-Cyber-Holi"
-          MAKE_FLAGS=(
-            ARCH=arm64
-            O=out
-            CC=clang
-            LLVM=1
-            LLVM_IAS=1
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LOCALVERSION=$CUSTOM_NAME
-          )
-          mkdir -p out
-          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
-          ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
-          ./scripts/config --file out/.config -d MODULE_SIG
-          ./scripts/config --file out/.config -e CONFIG_MODULES
-          ./scripts/config --file out/.config -e CONFIG_MODULE_UNLOAD
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
-          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
-          make "${MAKE_FLAGS[@]}" olddefconfig
-          make -j$(nproc) "${MAKE_FLAGS[@]}"
-          make -j$(nproc) "${MAKE_FLAGS[@]}" modules
-      - name: Install Modules to Staging
-        run: |
-          export PATH=$PWD/clang/bin:$PATH
-          CUSTOM_NAME="-lineageos-Cyber-Holi"
-          MAKE_FLAGS=(
-            ARCH=arm64
-            O=out
-            CC=clang
-            LLVM=1
-            LLVM_IAS=1
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LOCALVERSION=$CUSTOM_NAME
-          )
-          mkdir -p out/modules_staging
-          make "${MAKE_FLAGS[@]}" \
-            INSTALL_MOD_PATH=$PWD/out/modules_staging \
-            INSTALL_MOD_STRIP=1 \
-            modules_install
-          # ✅ FIX: Remove the circular symlinks that cause infinite cp loop
-          find out/modules_staging -type l -name "build" -delete
-          find out/modules_staging -type l -name "source" -delete
-          echo "=== Built modules ==="
-          find out/modules_staging -name "*.ko" | sort
-      - name: Prepare AnyKernel3
-        run: |
-          export PATH=$PWD/clang/bin:$PATH
-          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3/anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
-          echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3/anykernel.sh
-          cp out/arch/arm64/boot/Image AnyKernel3/
-          mkdir -p AnyKernel3/modules/vendor/lib/modules/
-          KVER=$(ls out/modules_staging/lib/modules/)
-          # ✅ FIX: Use cp -rP (no symlink follow) then explicitly copy only real files
-          find out/modules_staging/lib/modules/$KVER/ \
-            -maxdepth 1 \( -name "*.ko" -o -name "modules.*" \) \
-            -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
-          if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
-            cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko \
-               AnyKernel3/modules/vendor/lib/modules/wlan.ko
-          fi
-          find AnyKernel3/modules/ -name "*.ko" -exec llvm-strip --strip-debug {} \;
-          echo "=== Modules in zip ==="
-          ls AnyKernel3/modules/vendor/lib/modules/
-          cd AnyKernel3
-          zip -r9 ../Cyber-Final-Holi.zip *
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Cyber-Kernel-Official-Match
-          path: ./Cyber-Final-Holi.zip
+    - name: Checkout source
+      uses: actions/checkout@v4
+
+    - name: Install dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+        bc bison build-essential curl flex git \
+        libssl-dev libelf-dev libncurses-dev \
+        python3 unzip zip cpio \
+        clang lld llvm
+
+    - name: Clone Proton Clang
+      run: |
+        git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
+
+    - name: Clone AnyKernel3
+      run: |
+        git clone --depth=1 https://github.com/osm0sis/AnyKernel3
+
+    - name: Setup environment
+      run: |
+        echo "ARCH=arm64" >> $GITHUB_ENV
+        echo "SUBARCH=arm64" >> $GITHUB_ENV
+
+    - name: Build Kernel
+      run: |
+        export PATH=$PWD/clang/bin:$PATH
+
+        mkdir -p out
+
+        make O=out ARCH=arm64 vendor/holi-qgki_defconfig
+        make O=out ARCH=arm64 olddefconfig
+
+        make -j$(nproc) \
+        O=out \
+        ARCH=arm64 \
+        LLVM=1 \
+        LLVM_IAS=1
+
+    - name: Prepare AnyKernel zip
+      run: |
+        cp out/arch/arm64/boot/Image AnyKernel3/
+        cd AnyKernel3
+        zip -r9 Kernel-holi.zip *
+
+    - name: Upload Kernel Image
+      uses: actions/upload-artifact@v4
+      with:
+        name: Kernel-Image
+        path: out/arch/arm64/boot/Image
+
+    - name: Upload Flashable Kernel Zip
+      uses: actions/upload-artifact@v4
+      with:
+        name: Flashable-Kernel
+        path: AnyKernel3/Kernel-holi.zip
