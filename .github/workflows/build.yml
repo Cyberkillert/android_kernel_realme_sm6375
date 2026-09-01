@@ -1,185 +1,70 @@
-name: Build kernels
+name: Build Android Kernel (Cyber-Gaming-5.4-Final)
 
 on:
   workflow_dispatch:
 
 jobs:
-
-  Build-Kernel:
-    runs-on: ubuntu-latest
-
-    strategy:
-      fail-fast: false
-
-      matrix:
-        include:
-
-          - kernelSource:
-              name: "Realme SM6375 Kernel"
-              device: "realme_sm6375"
-              repo: "https://github.com/Cyberkillert/android_kernel_realme_sm6375.git"
-              branch: "lineage-23.2"
-              defconfig: "vendor/holi-qgki_defconfig"
-
-            withKernelSU: true
-
-            params:
-              ARCH: arm64
-              CROSS_COMPILE: ""
-              CROSS_COMPILE_ARM32: ""
-              CLANG_TRIPLE: "aarch64-linux-gnu-"
-              CC: clang
-
+  build:
+    runs-on: ubuntu-22.04
 
     steps:
-
-      # =========================================================
-      # CHECKOUT
-      # =========================================================
-
-      - name: Checkout Builder
+      - name: Checkout source
         uses: actions/checkout@v4
 
-
-      # =========================================================
-      # WORK DIRECTORY
-      # =========================================================
-
-      - name: Create Working Directory
-        run: |
-          mkdir -p workdir
-
-
-      # =========================================================
-      # PREREQUISITES
-      # =========================================================
-
-      - name: Install Prerequisites
+      - name: Install dependencies
         run: |
           sudo apt update
-
           sudo apt install -y \
-            curl \
-            git \
-            make \
-            binutils \
-            bc \
-            bison \
-            flex \
-            python3 \
-            zip \
-            unzip \
-            cpio \
-            tar \
-            findutils \
-            sed \
-            grep \
-            coreutils \
-            kmod \
-            libssl-dev \
-            build-essential \
-            ccache \
-            jq \
-            libelf-dev \
-            lz4 \
-            libncurses-dev
+          bc bison build-essential flex git curl \
+          libssl-dev libelf-dev libncurses-dev \
+          python3 unzip zip cpio
 
-
-      # =========================================================
-      # CLONE KERNEL
-      # =========================================================
-
-      - name: Clone Kernel Source
+      - name: Clone Proton Clang
         run: |
-          echo "=========================================="
-          echo "Cloning kernel source..."
-          echo "=========================================="
+          git clone --depth=1 https://github.com/kdrag0n/proton-clang clang
 
-          git clone \
-            --depth=1 \
-            -b "${{ matrix.kernelSource.branch }}" \
-            "${{ matrix.kernelSource.repo }}" \
-            workdir/kernel_workspace
-
-          cd workdir/kernel_workspace
-
-          echo ""
-          echo "Kernel:"
-          echo "${{ matrix.kernelSource.name }}"
-
-          echo "Device:"
-          echo "${{ matrix.kernelSource.device }}"
-
-          echo "Branch:"
-          git branch --show-current
-
-          echo "Commit:"
-          git rev-parse --short HEAD
-
-
-      # =========================================================
-      # DISABLE SPI CRC
-      # =========================================================
-
-      - name: Disable SPI CRC
+      - name: Clone AnyKernel3
         run: |
-          cd workdir/kernel_workspace
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-          echo "=========================================="
-          echo "Disabling SPI CRC..."
-          echo "=========================================="
+      - name: Build Kernel 5.4
+        run: |
+          export PATH=$PWD/clang/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          
+          # Match your working LineageOS version string
+          CUSTOM_NAME="-qgki-Cyber-Gaming"
 
-          if [ -f drivers/mmc/core/core.c ]; then
+          MAKE_FLAGS=(
+            ARCH=arm64
+            O=out
+            CC=clang
+            LLVM=1
+            LLVM_IAS=1
+            CROSS_COMPILE=aarch64-linux-gnu-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            KBUILD_MODPOST_WARN=1
+            LOCALVERSION=$CUSTOM_NAME
+          )
 
-            if grep -q "bool use_spi_crc = 1;" \
-              drivers/mmc/core/core.c; then
+          mkdir -p out
 
-              sed -i \
-                's/bool use_spi_crc = 1;/bool use_spi_crc = 0;/' \
-                drivers/mmc/core/core.c
+          # =========================================================
+          # PATCH: DISABLE CRC / ALLOW MISMATCHED MODULES
+          # =========================================================
 
-              echo "SPI CRC disabled."
+          echo "Applying kernel module mismatch patch..."
 
-            elif grep -q "bool use_spi_crc = 0;" \
-              drivers/mmc/core/core.c; then
-
-              echo "SPI CRC already disabled."
-
-            else
-
-              echo "WARNING: use_spi_crc declaration not found."
-
-            fi
-
-          else
-
-            echo "WARNING: drivers/mmc/core/core.c not found."
-
+          if [ ! -f kernel/module.c ]; then
+            echo "ERROR: kernel/module.c not found!"
+            exit 1
           fi
-
-
-      # =========================================================
-      # ALLOW MISMATCHED MODULES
-      # =========================================================
-
-      - name: Allow Mismatched Kernel Modules
-        run: |
-          cd workdir/kernel_workspace
-
-          echo "=========================================="
-          echo "Patching kernel/module.c..."
-          echo "=========================================="
 
           python3 - <<'PY'
           from pathlib import Path
 
           path = Path("kernel/module.c")
-
-          if not path.exists():
-              raise SystemExit(
-                  "ERROR: kernel/module.c not found"
-              )
-
           data = path.read_text()
 
           old = '''bad_version:
@@ -193,49 +78,23 @@ jobs:
           return 1;'''
 
           if old in data:
-
-              path.write_text(
-                  data.replace(old, new, 1)
-              )
-
-              print(
-                  "Successfully patched bad_version()."
-              )
-
+              path.write_text(data.replace(old, new, 1))
+              print("Successfully patched exact bad_version block.")
           else:
-
-              print(
-                  "Exact block not found."
-              )
-
-              print(
-                  "Trying generic patch..."
-              )
+              print("Exact bad_version block not found.")
+              print("Trying generic bad_version patch...")
 
               lines = data.splitlines()
-
               found = False
 
               for i, line in enumerate(lines):
-
                   if line.strip() == "bad_version:":
+                      print(f"Found bad_version at line {i + 1}")
 
-                      print(
-                          f"Found bad_version at line {i + 1}"
-                      )
-
-                      for j in range(
-                          i + 1,
-                          min(i + 20, len(lines))
-                      ):
-
+                      for j in range(i + 1, min(i + 20, len(lines))):
                           if lines[j].strip() == "return 0;":
-
                               lines[j] = "return 1;"
-
-                              path.write_text(
-                                  "\n".join(lines) + "\n"
-                              )
+                              path.write_text("\n".join(lines) + "\n")
 
                               print(
                                   f"Changed return 0 -> return 1 "
@@ -250,529 +109,73 @@ jobs:
 
               if not found:
                   raise SystemExit(
-                      "ERROR: Could not patch "
-                      "bad_version()."
+                      "ERROR: Could not find the bad_version "
+                      "return 0; in kernel/module.c"
                   )
-
           PY
 
+          echo "Verifying kernel/module.c patch..."
 
-      # =========================================================
-      # VERIFY MODULE PATCH
-      # =========================================================
+          grep -n -A10 -B2 "bad_version:" kernel/module.c || true
 
-      - name: Verify Module Patch
+          # =========================================================
+          # END PATCH
+          # =========================================================
+
+          # 1. Load the defconfig
+          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
+
+          # --- FIX SECTION MISMATCH (FATAL ERROR FIX) ---
+          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
+
+          # --- MODULE COMPATIBILITY ---
+          ./scripts/config --file out/.config -e MODULES
+          ./scripts/config --file out/.config -d MODVERSIONS
+          ./scripts/config --file out/.config -d MODULE_SIG
+          ./scripts/config --file out/.config -e MODULE_FORCE_LOAD
+          
+          # --- PERFORMANCE & CHARGING ---
+          ./scripts/config --file out/.config -e CPU_FREQ_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -d CPU_FREQ_DEFAULT_GOV_SCHEDUTIL
+          ./scripts/config --file out/.config -e CPU_FREQ_DEFAULT_GOV_PERFORMANCE
+          ./scripts/config --file out/.config -e HZ_1000
+          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
+
+          # Sync config with the mismatch bypass
+          make "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y olddefconfig
+
+          # 2. Build everything (Image + all .ko modules)
+          make -j$(nproc) "${MAKE_FLAGS[@]}" CONFIG_SECTION_MISMATCH_WARN_ONLY=y all
+
+      - name: Prepare AnyKernel3 (A/B + DLKM)
         run: |
-          cd workdir/kernel_workspace
-
-          echo "=========================================="
-          echo "Module patch verification"
-          echo "=========================================="
-
-          grep -n \
-            -A10 \
-            -B2 \
-            "bad_version:" \
-            kernel/module.c || true
-
-
-      # =========================================================
-      # DOWNLOAD ANDROID CLANG 21
-      # =========================================================
-
-      - name: Download Android Clang 21
-        run: |
-          cd workdir
-
-          mkdir -p toolchains
-
-          echo "=========================================="
-          echo "Downloading Android Clang r563880c..."
-          echo "=========================================="
-
-          git clone \
-            --depth=1 \
-            --filter=blob:none \
-            --sparse \
-            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
-            toolchains/clang
-
-          cd toolchains/clang
-
-          git sparse-checkout set clang-r563880c
-
-          echo ""
-          echo "Checking Clang..."
-
-          if [ ! -x clang-r563880c/bin/clang ]; then
-            echo "ERROR: clang-r563880c/bin/clang not found."
-            exit 1
-          fi
-
-          clang-r563880c/bin/clang --version
-
-
-      # =========================================================
-      # SET CLANG PATH
-      # =========================================================
-
-      - name: Set Android Clang Path
-        run: |
-          CLANG_BIN="$GITHUB_WORKSPACE/workdir/toolchains/clang/clang-r563880c/bin"
-
-          if [ ! -x "$CLANG_BIN/clang" ]; then
-            echo "ERROR: Clang binary not found."
-            exit 1
-          fi
-
-          echo "$CLANG_BIN" >> "$GITHUB_PATH"
-
-          echo "=========================================="
-          echo "Using Android Clang:"
-          echo "=========================================="
-
-          "$CLANG_BIN/clang" --version
-
-
-      # =========================================================
-      # KERNELSU NEXT
-      # =========================================================
-
-      - name: Update KernelSU Next & Apply Manual Hooks
-        if: ${{ matrix.withKernelSU == true }}
-
-        run: |
-          cd workdir/kernel_workspace
-
-          echo "=========================================="
-          echo "Injecting KernelSU Next..."
-          echo "=========================================="
-
-          curl -LSs \
-            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
-            | bash -s legacy
-
-
-          echo ""
-          echo "Downloading syscall hook patchset..."
-
-          curl -O \
-            "https://raw.githubusercontent.com/JackA1ltman/NonGKI_Kernel_Build_2nd/mainline/Patches/syscall_hook_patches.sh"
-
-          bash syscall_hook_patches.sh
-
-
-          # =====================================================
-          # KSU CONFIG
-          # =====================================================
-
-          echo ""
-          echo "Injecting KernelSU configuration..."
-
-          TARGET_CONFIG="arch/arm64/configs/${{ matrix.kernelSource.defconfig }}"
-
-          if [ ! -f "$TARGET_CONFIG" ]; then
-            echo "ERROR: Defconfig not found:"
-            echo "$TARGET_CONFIG"
-            exit 1
-          fi
-
-          echo "CONFIG_KSU=y" >> "$TARGET_CONFIG"
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$TARGET_CONFIG"
-
-
-          # =====================================================
-          # BCMP FIX
-          # =====================================================
-
-          echo ""
-          echo "Applying bcmp -> memcmp fix..."
-
-          if [ -f scripts/kconfig/confdata.c ]; then
-            sed -i \
-              's/bcmp/memcmp/g' \
-              scripts/kconfig/confdata.c
-          fi
-
-
-          # =====================================================
-          # WALT FIX
-          # =====================================================
-
-          echo ""
-          echo "Applying WALT fix..."
-
-          if [ -f kernel/sched/walt/walt.h ]; then
-
-            sed -i \
-              's/static inline int cpu_boost_init(void) { }/static inline int cpu_boost_init(void) { return 0; }/g' \
-              kernel/sched/walt/walt.h
-
-            sed -i \
-              's/static inline int cpu_boost_init(void) {}/static inline int cpu_boost_init(void) { return 0; }/g' \
-              kernel/sched/walt/walt.h
-
-          fi
-
-
-          # =====================================================
-          # NOHZ FIX
-          # =====================================================
-
-          echo ""
-          echo "Applying NOHZ_KICK_MASK fix..."
-
-          if [ -f kernel/sched/walt/qc_vas.c ]; then
-
-            cat << 'EOF' > patch_nohz.h
-          #include <linux/atomic.h>
-
-          #ifndef NOHZ_KICK_MASK
-          #define NOHZ_KICK_MASK 0
-
-          static atomic_t dummy_nohz_flags = ATOMIC_INIT(0);
-
-          #define nohz_flags(cpu) (&dummy_nohz_flags)
-
-          #endif
-          EOF
-
-            cat \
-              patch_nohz.h \
-              kernel/sched/walt/qc_vas.c \
-              > temp_qc.c
-
-            mv \
-              temp_qc.c \
-              kernel/sched/walt/qc_vas.c
-
-            rm \
-              patch_nohz.h
-
-          fi
-
-
-          # =====================================================
-          # EAS FIX
-          # =====================================================
-
-          echo ""
-          echo "Applying EAS scheduler fix..."
-
-          if [ -f kernel/sched/fair.c ]; then
-
-            sed -i \
-              's/static_branch_unlikely(&sched_energy_present)/sched_energy_enabled()/g' \
-              kernel/sched/fair.c
-
-            sed -i \
-              's/static_branch_likely(&sched_energy_present)/sched_energy_enabled()/g' \
-              kernel/sched/fair.c
-
-          fi
-
-
-          # =====================================================
-          # RMNET SHS FIX
-          # =====================================================
-
-          echo ""
-          echo "Applying RMNET SHS bypass..."
-
-          if [ -d techpack/datarmnet-ext/shs ]; then
-
-            rm -rf \
-              techpack/datarmnet-ext/shs
-
-            mkdir -p \
-              techpack/datarmnet-ext/shs
-
-            echo "obj- := " \
-              > techpack/datarmnet-ext/shs/Makefile
-
-          fi
-
-
-          if [ -f techpack/datarmnet-ext/Makefile ]; then
-
-            sed -i \
-              's/obj-y += shs\// /g' \
-              techpack/datarmnet-ext/Makefile
-
-            sed -i \
-              's/obj-$(CONFIG_RMNET_SHS) += shs\// /g' \
-              techpack/datarmnet-ext/Makefile
-
-          fi
-
-
-      # =========================================================
-      # BUILD KERNEL
-      # =========================================================
-
-      - name: Compile Android Kernel
-        run: |
-
-          cd workdir/kernel_workspace
-
-          export ARCH="${{ matrix.params.ARCH }}"
-          export CROSS_COMPILE="${{ matrix.params.CROSS_COMPILE }}"
-          export CROSS_COMPILE_ARM32="${{ matrix.params.CROSS_COMPILE_ARM32 }}"
-          export CLANG_TRIPLE="${{ matrix.params.CLANG_TRIPLE }}"
-          export CC="${{ matrix.params.CC }}"
-
-          export CLANG_PATH="$GITHUB_WORKSPACE/workdir/toolchains/clang/clang-r563880c/bin"
-          export PATH="$CLANG_PATH:$PATH"
-
-          echo "=========================================="
-          echo "Compiler"
-          echo "=========================================="
-
-          which clang
-          clang --version
-
-          echo ""
-          echo "=========================================="
-          echo "Generating defconfig"
-          echo "=========================================="
-
-          make \
-            O=out \
-            ARCH="$ARCH" \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            "${{ matrix.kernelSource.defconfig }}"
-
-
-          # =====================================================
-          # OLDDEFCONFIG
-          # =====================================================
-
-          echo ""
-          echo "Resolving configuration..."
-
-          make \
-            O=out \
-            ARCH="$ARCH" \
-            CC=clang \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            olddefconfig
-
-
-          # =====================================================
-          # SHOW CONFIG
-          # =====================================================
-
-          echo ""
-          echo "=========================================="
-          echo "Important kernel configuration"
-          echo "=========================================="
-
-          grep -E \
-            "CONFIG_KSU=|CONFIG_MODULES=|CONFIG_MODVERSIONS=" \
-            out/.config || true
-
-
-          # =====================================================
-          # SELINUX
-          # =====================================================
-
-          echo ""
-          echo "=========================================="
-          echo "Generating SELinux headers..."
-          echo "=========================================="
-
-          mkdir -p \
-            security/selinux/include
-
-          cat << 'EOF' > gen_selinux.py
-          import re
-
-          with open(
-              "security/selinux/include/classmap.h",
-              "r"
-          ) as f:
-              content = f.read()
-
-          content = re.sub(
-              r'/\*.*?\*/',
-              '',
-              content,
-              flags=re.DOTALL
-          )
-
-          content = re.sub(
-              r'//.*',
-              '',
-              content
-          )
-
-          matches = re.findall(
-              r'\{\s*"(\w+)"\s*,\s*\{([^}]+)\}',
-              content
-          )
-
-          with open(
-              "security/selinux/include/flask.h",
-              "w"
-          ) as f_flask, open(
-              "security/selinux/include/av_permissions.h",
-              "w"
-          ) as f_av:
-
-              f_flask.write(
-                  "#ifndef _SELINUX_FLASK_H_\n"
-                  "#define _SELINUX_FLASK_H_\n"
-              )
-
-              f_av.write(
-                  "#ifndef _SELINUX_AV_PERMISSIONS_H_\n"
-                  "#define _SELINUX_AV_PERMISSIONS_H_\n"
-              )
-
-              for i, (cls, perms_str) in enumerate(
-                  matches,
-                  1
-              ):
-
-                  cls_upper = cls.upper()
-
-                  f_flask.write(
-                      f"#define SECCLASS_{cls_upper} {i}\n"
-                  )
-
-                  perms = re.findall(
-                      r'"(\w+)"',
-                      perms_str
-                  )
-
-                  for j, perm in enumerate(perms):
-
-                      f_av.write(
-                          f"#define "
-                          f"{cls_upper}__"
-                          f"{perm.upper()} "
-                          f"(1UL << {j})\n"
-                      )
-
-              f_flask.write("#endif\n")
-              f_av.write("#endif\n")
-          EOF
-
-          python3 gen_selinux.py
-
-
-          # =====================================================
-          # COPY SELINUX HEADERS
-          # =====================================================
-
-          mkdir -p \
-            out/security/selinux/include
-
-          cp \
-            security/selinux/include/flask.h \
-            out/security/selinux/include/ \
-            || true
-
-          cp \
-            security/selinux/include/av_permissions.h \
-            out/security/selinux/include/ \
-            || true
-
-
-          # =====================================================
-          # KSU INCLUDE PATH
-          # =====================================================
-
-          if [ -d drivers/kernelsu ]; then
-
-            echo ""
-            echo "Injecting KernelSU include paths..."
-
-            find \
-              drivers/kernelsu \
-              -name "Makefile" \
-              -exec sh -c \
-              'echo "ccflags-y += -I\$(srctree)/security/selinux/include -I\$(objtree)/security/selinux/include -DSECINITSID_NUM=27 -DCONFIG_SECURITY_SELINUX_SIDTAB_HASH_BITS=9" >> "{}"' \
-              \;
-
-          fi
-
-
-          # =====================================================
-          # FINAL BUILD
-          # =====================================================
-
-          echo ""
-          echo "=========================================="
-          echo "Starting final kernel build"
-          echo "=========================================="
-
-          make \
-            -j"$(nproc --all)" \
-            O=out \
-            ARCH="$ARCH" \
-            CC="$CC" \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE="$CROSS_COMPILE" \
-            CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32"
-
-
-      # =========================================================
-      # VERIFY BUILD
-      # =========================================================
-
-      - name: Verify Build Output
-        run: |
-
-          cd workdir/kernel_workspace
-
-          echo "=========================================="
-          echo "Checking kernel output..."
-          echo "=========================================="
-
-          find \
-            out/arch/arm64/boot \
-            -maxdepth 1 \
-            -type f \
-            -print || true
-
+          # 1. Fix script for A/B + Qualcomm Path
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
+          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
+          sed -i 's|block=/dev/block/platform/omap/omap_hsmmc.0/by-name/boot;|block=/dev/block/by-name/boot;|g' AnyKernel3/anykernel.sh
+
+          # 2. Copy the 5.4 Image
           if [ -f out/arch/arm64/boot/Image ]; then
-
-            echo ""
-            echo "=========================================="
-            echo "SUCCESS"
-            echo "Kernel Image generated."
-            echo "=========================================="
-
+            cp out/arch/arm64/boot/Image AnyKernel3/
           else
-
-            echo ""
-            echo "ERROR"
-            echo "Kernel Image was not generated."
-
+            echo "Build failed: Image not found!"
             exit 1
-
           fi
+          
+          # 3. Collect and Strip 5.4 Modules
+          # Putting modules in vendor_dlkm path for Realme A/B
+          mkdir -p AnyKernel3/modules/vendor_dlkm/lib/modules
+          find out -name "*.ko" -exec cp {} AnyKernel3/modules/vendor_dlkm/lib/modules/ \;
+          
+          # Strip debug symbols to prevent 'Exec format error' and keep zip small
+          find AnyKernel3/modules/ -name "*.ko" -exec aarch64-linux-gnu-strip --strip-debug {} \;
 
+          cd AnyKernel3
+          zip -r9 ../Cyber-5.4-Final-Holi.zip *
 
-      # =========================================================
-      # UPLOAD
-      # =========================================================
-
-      - name: Upload Compiled Kernel
+      - name: Upload Flashable Zip
         uses: actions/upload-artifact@v4
-
         with:
-          name: Build-${{ matrix.kernelSource.name }}-${{ matrix.kernelSource.device }}
-
-          path: |
-            workdir/kernel_workspace/out/arch/arm64/boot/Image
-            workdir/kernel_workspace/out/arch/arm64/boot/Image.gz
-            workdir/kernel_workspace/out/arch/arm64/boot/dtb
-            workdir/kernel_workspace/out/arch/arm64/boot/dtbo.img
-
-          if-no-files-found: error
+          name: Cyber-Kernel-5.4-Final
+          path: ./Cyber-5.4-Final-Holi.zip
