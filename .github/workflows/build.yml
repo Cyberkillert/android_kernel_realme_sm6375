@@ -4,55 +4,61 @@ on:
   workflow_dispatch:
 
 jobs:
-  Set_repos:
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Generate Matrix
-        id: set-matrix
-        run: |
-          if [ ! -f repos.json ]; then
-            echo "Error: repos.json file not found in the repository root!"
-            exit 1
-          fi
-
-          JSON=$(cat repos.json | tr -d '\n' | tr -d ' ')
-          echo "matrix=${JSON}" >> $GITHUB_OUTPUT
-
 
   Build-Kernel:
-    needs: Set_repos
     runs-on: ubuntu-latest
 
     strategy:
+      fail-fast: false
+
       matrix:
-        include: ${{ fromJSON(needs.Set_repos.outputs.matrix) }}
+        include:
+
+          - kernelSource:
+              name: "Realme SM6375 Kernel"
+              device: "realme_sm6375"
+              repo: "https://github.com/Cyberkillert/android_kernel_realme_sm6375.git"
+              branch: "lineage-23.2"
+              defconfig: "vendor/holi-qgki_defconfig"
+
+            withKernelSU: true
+
+            params:
+              ARCH: arm64
+              CROSS_COMPILE: ""
+              CROSS_COMPILE_ARM32: ""
+              CLANG_TRIPLE: "aarch64-linux-gnu-"
+              CC: clang
+
+            toolchains:
+              - name: "clang"
+                repo: "https://github.com/ZyCromerZ/Clang.git"
+                branch: "19"
+
 
     steps:
 
-      # ---------------------------------------------------------
+      # =========================================================
       # CHECKOUT BUILDER
-      # ---------------------------------------------------------
+      # =========================================================
+
       - name: Checkout Builder
         uses: actions/checkout@v4
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # CREATE WORKING DIRECTORY
-      # ---------------------------------------------------------
+      # =========================================================
+
       - name: Create Working Directory
         run: |
           mkdir -p workdir
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # INSTALL PREREQUISITES
-      # ---------------------------------------------------------
+      # =========================================================
+
       - name: Install Prerequisites
         run: |
           sudo apt update
@@ -82,50 +88,88 @@ jobs:
             libelf-dev
 
 
-      # ---------------------------------------------------------
-      # CLONE KERNEL SOURCE + APPLY PATCHES
-      # ---------------------------------------------------------
+      # =========================================================
+      # CLONE KERNEL SOURCE
+      # =========================================================
+
       - name: Clone Kernel Source
         run: |
+          echo "=========================================="
+          echo "Cloning kernel source..."
+          echo "=========================================="
+
           git clone \
-            -b ${{ matrix.kernelSource.branch }} \
-            ${{ matrix.kernelSource.repo }} \
+            -b "${{ matrix.kernelSource.branch }}" \
+            "${{ matrix.kernelSource.repo }}" \
             workdir/kernel_workspace
 
           cd workdir/kernel_workspace
 
-          # -----------------------------------------------------
-          # DISABLE SPI CRC BY DEFAULT
-          # -----------------------------------------------------
+          echo ""
+          echo "Kernel:"
+          echo "${{ matrix.kernelSource.name }}"
+
+          echo "Device:"
+          echo "${{ matrix.kernelSource.device }}"
+
+          echo "Branch:"
+          git branch --show-current
+
+          echo "Commit:"
+          git rev-parse --short HEAD
+
+
+      # =========================================================
+      # DISABLE SPI CRC
+      # =========================================================
+
+      - name: Disable SPI CRC
+        run: |
+          cd workdir/kernel_workspace
+
           echo "=========================================="
           echo "Disabling SPI CRC by default..."
           echo "=========================================="
 
           if [ -f drivers/mmc/core/core.c ]; then
 
-            if grep -q "bool use_spi_crc = 1;" drivers/mmc/core/core.c; then
+            if grep -q "bool use_spi_crc = 1;" \
+              drivers/mmc/core/core.c; then
+
               sed -i \
                 's/bool use_spi_crc = 1;/bool use_spi_crc = 0;/' \
                 drivers/mmc/core/core.c
 
               echo "SPI CRC successfully disabled."
 
-            elif grep -q "bool use_spi_crc = 0;" drivers/mmc/core/core.c; then
+            elif grep -q "bool use_spi_crc = 0;" \
+              drivers/mmc/core/core.c; then
+
               echo "SPI CRC is already disabled."
 
             else
-              echo "WARNING: use_spi_crc declaration not found."
+
+              echo "WARNING:"
+              echo "use_spi_crc declaration not found."
+
             fi
 
           else
-            echo "WARNING: drivers/mmc/core/core.c not found."
+
+            echo "WARNING:"
+            echo "drivers/mmc/core/core.c not found."
+
           fi
 
 
-          # -----------------------------------------------------
-          # ALLOW MISMATCHED KERNEL MODULES
-          # -----------------------------------------------------
-          echo ""
+      # =========================================================
+      # ALLOW MISMATCHED KERNEL MODULES
+      # =========================================================
+
+      - name: Allow Mismatched Kernel Modules
+        run: |
+          cd workdir/kernel_workspace
+
           echo "=========================================="
           echo "Allowing mismatched kernel modules..."
           echo "=========================================="
@@ -142,7 +186,6 @@ jobs:
 
           data = path.read_text()
 
-          # Exact common kernel implementation
           old = '''bad_version:
           pr_warn("%s: disagrees about version of symbol %s\\n",
                   info->name, symname);
@@ -154,8 +197,9 @@ jobs:
           return 1;'''
 
           # -----------------------------------------------------
-          # First try exact replacement
+          # Exact match
           # -----------------------------------------------------
+
           if old in data:
 
               path.write_text(
@@ -174,16 +218,13 @@ jobs:
               )
 
               print(
-                  "Trying generic bad_version() patch..."
+                  "Trying generic patch..."
               )
 
               lines = data.splitlines()
 
               found = False
 
-              # -------------------------------------------------
-              # Find bad_version label
-              # -------------------------------------------------
               for i, line in enumerate(lines):
 
                   if line.strip() == "bad_version:":
@@ -192,9 +233,6 @@ jobs:
                           f"Found bad_version at line {i + 1}"
                       )
 
-                      # -----------------------------------------
-                      # Search nearby for return 0;
-                      # -----------------------------------------
                       for j in range(
                           i + 1,
                           min(i + 20, len(lines))
@@ -202,22 +240,23 @@ jobs:
 
                           if lines[j].strip() == "return 0;":
 
-                              lines[j] = lines[j].replace(
-                                  "return 0;",
-                                  "return 1;"
-                              )
+                              lines[j] = "return 1;"
 
                               path.write_text(
                                   "\n".join(lines) + "\n"
                               )
 
                               print(
-                                  "Successfully changed "
-                                  f"return 0 -> return 1 "
-                                  f"at line {j + 1}"
+                                  "Changed:"
+                              )
+
+                              print(
+                                  f"line {j + 1}: "
+                                  "return 0; -> return 1;"
                               )
 
                               found = True
+
                               break
 
                       if found:
@@ -226,22 +265,26 @@ jobs:
               if not found:
 
                   raise SystemExit(
-                      "ERROR: Could not patch "
-                      "bad_version() in kernel/module.c"
+                      "ERROR: Could not find "
+                      "bad_version() mismatch return."
                   )
 
           print(
-              "Module version mismatch patch completed."
+              "Module mismatch patch completed."
           )
           PY
 
 
-          # -----------------------------------------------------
-          # VERIFY MODULE PATCH
-          # -----------------------------------------------------
-          echo ""
+      # =========================================================
+      # VERIFY MODULE PATCH
+      # =========================================================
+
+      - name: Verify Module Patch
+        run: |
+          cd workdir/kernel_workspace
+
           echo "=========================================="
-          echo "Verifying module mismatch patch..."
+          echo "Verifying module patch..."
           echo "=========================================="
 
           grep -n \
@@ -251,16 +294,23 @@ jobs:
             kernel/module.c || true
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # DOWNLOAD TOOLCHAINS
-      # ---------------------------------------------------------
+      # =========================================================
+
       - name: Download Toolchains
         run: |
           cd workdir
 
           mkdir -p toolchains
 
-          echo '${{ toJSON(matrix.toolchains) }}' > toolchains.json
+          cat > toolchains.json <<'EOF'
+          ${{ toJSON(matrix.toolchains) }}
+          EOF
+
+          echo "=========================================="
+          echo "Downloading toolchains..."
+          echo "=========================================="
 
           jq -c '.[]' toolchains.json | while read -r toolchain; do
 
@@ -268,7 +318,8 @@ jobs:
             BRANCH=$(echo "$toolchain" | jq -r '.branch')
             NAME=$(echo "$toolchain" | jq -r '.name')
 
-            echo "Cloning toolchain: $NAME"
+            echo ""
+            echo "Toolchain: $NAME"
             echo "Repository: $REPO"
             echo "Branch: $BRANCH"
 
@@ -281,9 +332,10 @@ jobs:
           done
 
 
-      # ---------------------------------------------------------
-      # KERNELSU NEXT + MANUAL HOOKS
-      # ---------------------------------------------------------
+      # =========================================================
+      # UPDATE KERNELSU NEXT
+      # =========================================================
+
       - name: Update KernelSU Next & Apply Manual Hooks
         if: ${{ matrix.withKernelSU == true }}
 
@@ -301,41 +353,54 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "Downloading automated system call hooks..."
+          echo "Downloading syscall hook patchset..."
           echo "=========================================="
 
           curl -O \
-            https://raw.githubusercontent.com/JackA1ltman/NonGKI_Kernel_Build_2nd/mainline/Patches/syscall_hook_patches.sh
+            "https://raw.githubusercontent.com/JackA1ltman/NonGKI_Kernel_Build_2nd/mainline/Patches/syscall_hook_patches.sh"
 
           bash syscall_hook_patches.sh
 
 
           echo ""
           echo "=========================================="
-          echo "Injecting KernelSU config flags..."
+          echo "Injecting KernelSU configuration..."
           echo "=========================================="
 
           TARGET_CONFIG="arch/arm64/configs/${{ matrix.kernelSource.defconfig }}"
+
+          if [ ! -f "$TARGET_CONFIG" ]; then
+            echo "ERROR: Defconfig not found:"
+            echo "$TARGET_CONFIG"
+            exit 1
+          fi
 
           echo "CONFIG_KSU=y" >> "$TARGET_CONFIG"
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$TARGET_CONFIG"
 
 
+          # =====================================================
+          # BCMP -> MEMCMP
+          # =====================================================
+
           echo ""
-          echo "=========================================="
-          echo "Applying compiler compatibility fix..."
-          echo "=========================================="
+          echo "Applying bcmp -> memcmp compatibility fix..."
 
           if [ -f scripts/kconfig/confdata.c ]; then
-            sed -i 's/bcmp/memcmp/g' \
+
+            sed -i \
+              's/bcmp/memcmp/g' \
               scripts/kconfig/confdata.c
+
           fi
 
 
+          # =====================================================
+          # WALT FIX
+          # =====================================================
+
           echo ""
-          echo "=========================================="
           echo "Applying WALT header return type fix..."
-          echo "=========================================="
 
           if [ -f kernel/sched/walt/walt.h ]; then
 
@@ -350,10 +415,12 @@ jobs:
           fi
 
 
+          # =====================================================
+          # NOHZ KICK MASK FIX
+          # =====================================================
+
           echo ""
-          echo "=========================================="
           echo "Applying NOHZ_KICK_MASK fix..."
-          echo "=========================================="
 
           if [ -f kernel/sched/walt/qc_vas.c ]; then
 
@@ -370,22 +437,27 @@ jobs:
           #endif
           EOF
 
-            cat patch_nohz.h \
+            cat \
+              patch_nohz.h \
               kernel/sched/walt/qc_vas.c \
               > temp_qc.c
 
-            mv temp_qc.c \
+            mv \
+              temp_qc.c \
               kernel/sched/walt/qc_vas.c
 
-            rm patch_nohz.h
+            rm \
+              patch_nohz.h
 
           fi
 
 
+          # =====================================================
+          # EAS FIX
+          # =====================================================
+
           echo ""
-          echo "=========================================="
-          echo "Applying EAS sched_energy_present fix..."
-          echo "=========================================="
+          echo "Applying EAS scheduler fix..."
 
           if [ -f kernel/sched/fair.c ]; then
 
@@ -400,10 +472,12 @@ jobs:
           fi
 
 
+          # =====================================================
+          # RMNET SHS BYPASS
+          # =====================================================
+
           echo ""
-          echo "=========================================="
-          echo "Disabling buggy Qualcomm RMNET SHS..."
-          echo "=========================================="
+          echo "Applying Qualcomm RMNET SHS bypass..."
 
           if [ -d techpack/datarmnet-ext/shs ]; then
 
@@ -432,11 +506,16 @@ jobs:
           fi
 
 
-      # ---------------------------------------------------------
+      # =========================================================
       # SET TOOLCHAIN PATH
-      # ---------------------------------------------------------
-      - name: Set Toolchain Path Environmental Variables
+      # =========================================================
+
+      - name: Set Toolchain Path
         run: |
+          echo "=========================================="
+          echo "Adding toolchains to PATH..."
+          echo "=========================================="
+
           find \
             "$GITHUB_WORKSPACE/workdir/toolchains" \
             -type d \
@@ -445,57 +524,93 @@ jobs:
 
                 echo "$bin_path" >> "$GITHUB_PATH"
 
+                echo "Added:"
+                echo "$bin_path"
+
               done
 
 
-      # ---------------------------------------------------------
-      # COMPILE ANDROID KERNEL
-      # ---------------------------------------------------------
+      # =========================================================
+      # BUILD KERNEL
+      # =========================================================
+
       - name: Compile Android Kernel
         run: |
 
           cd workdir/kernel_workspace
 
-          export ARCH=${{ matrix.params.ARCH }}
-          export CROSS_COMPILE=${{ matrix.params.CROSS_COMPILE }}
-          export CROSS_COMPILE_ARM32=${{ matrix.params.CROSS_COMPILE_ARM32 }}
-          export CLANG_TRIPLE=${{ matrix.params.CLANG_TRIPLE }}
-          export CC=${{ matrix.params.CC }}
+          export ARCH="${{ matrix.params.ARCH }}"
+          export CROSS_COMPILE="${{ matrix.params.CROSS_COMPILE }}"
+          export CROSS_COMPILE_ARM32="${{ matrix.params.CROSS_COMPILE_ARM32 }}"
+          export CLANG_TRIPLE="${{ matrix.params.CLANG_TRIPLE }}"
+          export CC="${{ matrix.params.CC }}"
 
 
           echo "=========================================="
-          echo "Generating base configuration..."
+          echo "Kernel configuration"
           echo "=========================================="
+
+          echo "ARCH=$ARCH"
+          echo "CC=$CC"
+          echo "CLANG_TRIPLE=$CLANG_TRIPLE"
+          echo "DEFCONFIG=${{ matrix.kernelSource.defconfig }}"
+
+
+          # =====================================================
+          # BASE DEFCONFIG
+          # =====================================================
 
           make \
             O=out \
-            ARCH=$ARCH \
+            ARCH="$ARCH" \
             CC=clang \
             LLVM=1 \
             LLVM_IAS=1 \
-            ${{ matrix.kernelSource.defconfig }}
+            "${{ matrix.kernelSource.defconfig }}"
 
+
+          # =====================================================
+          # OLDDEFCONFIG
+          # =====================================================
 
           echo ""
-          echo "=========================================="
           echo "Resolving missing configuration options..."
-          echo "=========================================="
 
           make \
             O=out \
-            ARCH=$ARCH \
+            ARCH="$ARCH" \
             CC=clang \
             LLVM=1 \
             LLVM_IAS=1 \
             olddefconfig
 
 
+          # =====================================================
+          # SHOW IMPORTANT CONFIG
+          # =====================================================
+
+          echo ""
+          echo "=========================================="
+          echo "Kernel configuration status"
+          echo "=========================================="
+
+          grep -E \
+            "CONFIG_KSU=|CONFIG_MODVERSIONS=|CONFIG_MODULES=" \
+            out/.config || true
+
+
+          # =====================================================
+          # SELINUX HEADERS
+          # =====================================================
+
           echo ""
           echo "=========================================="
           echo "Generating SELinux headers..."
           echo "=========================================="
 
-          mkdir -p security/selinux/include
+          mkdir -p \
+            security/selinux/include
+
 
           cat << 'EOF' > gen_selinux.py
           import re
@@ -571,13 +686,16 @@ jobs:
               f_av.write("#endif\n")
           EOF
 
+
           python3 gen_selinux.py
 
 
+          # =====================================================
+          # COPY SELINUX HEADERS TO OUT
+          # =====================================================
+
           echo ""
-          echo "=========================================="
-          echo "Mirroring SELinux headers..."
-          echo "=========================================="
+          echo "Mirroring generated SELinux headers..."
 
           mkdir -p \
             out/security/selinux/include
@@ -593,46 +711,28 @@ jobs:
             || true
 
 
+          # =====================================================
+          # KERNELSU INCLUDE PATHS
+          # =====================================================
+
           echo ""
-          echo "=========================================="
           echo "Injecting KernelSU include paths..."
-          echo "=========================================="
 
-          find drivers/kernelsu \
-            -name "Makefile" \
-            -exec sh -c \
-            'echo "ccflags-y += -I\$(srctree)/security/selinux/include -I\$(objtree)/security/selinux/include -DSECINITSID_NUM=27 -DCONFIG_SECURITY_SELINUX_SIDTAB_HASH_BITS=9" >> "{}"' \;
+          if [ -d drivers/kernelsu ]; then
 
+            find \
+              drivers/kernelsu \
+              -name "Makefile" \
+              -exec sh -c \
+              'echo "ccflags-y += -I\$(srctree)/security/selinux/include -I\$(objtree)/security/selinux/include -DSECINITSID_NUM=27 -DCONFIG_SECURITY_SELINUX_SIDTAB_HASH_BITS=9" >> "{}"' \
+              \;
+
+          fi
+
+
+          # =====================================================
+          # FINAL BUILD
+          # =====================================================
 
           echo ""
-          echo "=========================================="
-          echo "Starting final kernel build..."
-          echo "=========================================="
-
-          make \
-            -j$(nproc --all) \
-            O=out \
-            ARCH=$ARCH \
-            CC=$CC \
-            LLVM=1 \
-            LLVM_IAS=1 \
-            CROSS_COMPILE=$CROSS_COMPILE \
-            CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32
-
-
-      # ---------------------------------------------------------
-      # UPLOAD BUILD OUTPUT
-      # ---------------------------------------------------------
-      - name: Upload Compiled Flashable Images
-        uses: actions/upload-artifact@v4
-
-        with:
-          name: Build-${{ matrix.kernelSource.name }}-${{ matrix.kernelSource.device }}
-
-          path: |
-            workdir/kernel_workspace/out/arch/arm64/boot/Image
-            workdir/kernel_workspace/out/arch/arm64/boot/Image.gz
-            workdir/kernel_workspace/out/arch/arm64/boot/dtb
-            workdir/kernel_workspace/out/arch/arm64/boot/dtbo.img
-
-          if-no-files-found: error
+          echo "===
