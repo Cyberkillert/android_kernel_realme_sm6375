@@ -8,6 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,108 +20,619 @@ jobs:
             echo "Error: repos.json file not found in the repository root!"
             exit 1
           fi
+
           JSON=$(cat repos.json | tr -d '\n' | tr -d ' ')
           echo "matrix=${JSON}" >> $GITHUB_OUTPUT
+
 
   Build-Kernel:
     needs: Set_repos
     runs-on: ubuntu-latest
+
     strategy:
       matrix:
         include: ${{ fromJSON(needs.Set_repos.outputs.matrix) }}
+
     steps:
+
+      # ---------------------------------------------------------
+      # CHECKOUT BUILDER
+      # ---------------------------------------------------------
       - name: Checkout Builder
         uses: actions/checkout@v4
 
-      - name: Create Working Directory
-        run: mkdir -p workdir
 
+      # ---------------------------------------------------------
+      # CREATE WORKING DIRECTORY
+      # ---------------------------------------------------------
+      - name: Create Working Directory
+        run: |
+          mkdir -p workdir
+
+
+      # ---------------------------------------------------------
+      # INSTALL PREREQUISITES
+      # ---------------------------------------------------------
       - name: Install Prerequisites
         run: |
           sudo apt update
-          sudo apt install -y curl git make binutils bc bison flex python3 zip unzip cpio tar findutils sed grep coreutils kmod libssl-dev build-essential ccache jq libelf-dev
 
+          sudo apt install -y \
+            curl \
+            git \
+            make \
+            binutils \
+            bc \
+            bison \
+            flex \
+            python3 \
+            zip \
+            unzip \
+            cpio \
+            tar \
+            findutils \
+            sed \
+            grep \
+            coreutils \
+            kmod \
+            libssl-dev \
+            build-essential \
+            ccache \
+            jq \
+            libelf-dev
+
+
+      # ---------------------------------------------------------
+      # CLONE KERNEL SOURCE + APPLY PATCHES
+      # ---------------------------------------------------------
       - name: Clone Kernel Source
         run: |
-          git clone -b ${{ matrix.kernelSource.branch }} ${{ matrix.kernelSource.repo }} workdir/kernel_workspace
+          git clone \
+            -b ${{ matrix.kernelSource.branch }} \
+            ${{ matrix.kernelSource.repo }} \
+            workdir/kernel_workspace
 
           cd workdir/kernel_workspace
 
+          # -----------------------------------------------------
+          # DISABLE SPI CRC BY DEFAULT
+          # -----------------------------------------------------
+          echo "=========================================="
           echo "Disabling SPI CRC by default..."
-          sed -i 's/bool use_spi_crc = 1;/bool use_spi_crc = 0;/' drivers/mmc/core/core.c
+          echo "=========================================="
 
-          echo "Allowing mismatched kernel modules to load..."
+          if [ -f drivers/mmc/core/core.c ]; then
+
+            if grep -q "bool use_spi_crc = 1;" drivers/mmc/core/core.c; then
+              sed -i \
+                's/bool use_spi_crc = 1;/bool use_spi_crc = 0;/' \
+                drivers/mmc/core/core.c
+
+              echo "SPI CRC successfully disabled."
+
+            elif grep -q "bool use_spi_crc = 0;" drivers/mmc/core/core.c; then
+              echo "SPI CRC is already disabled."
+
+            else
+              echo "WARNING: use_spi_crc declaration not found."
+            fi
+
+          else
+            echo "WARNING: drivers/mmc/core/core.c not found."
+          fi
+
+
+          # -----------------------------------------------------
+          # ALLOW MISMATCHED KERNEL MODULES
+          # -----------------------------------------------------
+          echo ""
+          echo "=========================================="
+          echo "Allowing mismatched kernel modules..."
+          echo "=========================================="
+
           python3 - <<'PY'
           from pathlib import Path
 
           path = Path("kernel/module.c")
+
+          if not path.exists():
+              raise SystemExit(
+                  "ERROR: kernel/module.c not found"
+              )
+
           data = path.read_text()
 
+          # Exact common kernel implementation
           old = '''bad_version:
           pr_warn("%s: disagrees about version of symbol %s\\n",
                   info->name, symname);
           return 0;'''
 
           new = '''bad_version:
-          pr_warn("%s: disagrees about version of symbol but we'll look past that... %s\\n",
+          pr_warn("%s: disagrees about version of symbol %s - allowing mismatch\\n",
                   info->name, symname);
           return 1;'''
 
-          if old not in data:
-              raise SystemExit("ERROR: bad_version block not found in kernel/module.c")
+          # -----------------------------------------------------
+          # First try exact replacement
+          # -----------------------------------------------------
+          if old in data:
 
-          path.write_text(data.replace(old, new, 1))
+              path.write_text(
+                  data.replace(old, new, 1)
+              )
+
+              print(
+                  "Successfully patched bad_version() "
+                  "using exact match."
+              )
+
+          else:
+
+              print(
+                  "Exact bad_version block not found."
+              )
+
+              print(
+                  "Trying generic bad_version() patch..."
+              )
+
+              lines = data.splitlines()
+
+              found = False
+
+              # -------------------------------------------------
+              # Find bad_version label
+              # -------------------------------------------------
+              for i, line in enumerate(lines):
+
+                  if line.strip() == "bad_version:":
+
+                      print(
+                          f"Found bad_version at line {i + 1}"
+                      )
+
+                      # -----------------------------------------
+                      # Search nearby for return 0;
+                      # -----------------------------------------
+                      for j in range(
+                          i + 1,
+                          min(i + 20, len(lines))
+                      ):
+
+                          if lines[j].strip() == "return 0;":
+
+                              lines[j] = lines[j].replace(
+                                  "return 0;",
+                                  "return 1;"
+                              )
+
+                              path.write_text(
+                                  "\n".join(lines) + "\n"
+                              )
+
+                              print(
+                                  "Successfully changed "
+                                  f"return 0 -> return 1 "
+                                  f"at line {j + 1}"
+                              )
+
+                              found = True
+                              break
+
+                      if found:
+                          break
+
+              if not found:
+
+                  raise SystemExit(
+                      "ERROR: Could not patch "
+                      "bad_version() in kernel/module.c"
+                  )
+
+          print(
+              "Module version mismatch patch completed."
+          )
           PY
 
+
+          # -----------------------------------------------------
+          # VERIFY MODULE PATCH
+          # -----------------------------------------------------
+          echo ""
+          echo "=========================================="
+          echo "Verifying module mismatch patch..."
+          echo "=========================================="
+
+          grep -n \
+            -A10 \
+            -B2 \
+            "bad_version:" \
+            kernel/module.c || true
+
+
+      # ---------------------------------------------------------
+      # DOWNLOAD TOOLCHAINS
+      # ---------------------------------------------------------
       - name: Download Toolchains
         run: |
           cd workdir
+
           mkdir -p toolchains
+
           echo '${{ toJSON(matrix.toolchains) }}' > toolchains.json
+
           jq -c '.[]' toolchains.json | while read -r toolchain; do
+
             REPO=$(echo "$toolchain" | jq -r '.repo')
             BRANCH=$(echo "$toolchain" | jq -r '.branch')
             NAME=$(echo "$toolchain" | jq -r '.name')
-            echo "Cloning toolchain: $NAME from $REPO [$BRANCH]..."
-            git clone -b "$BRANCH" --depth=1 "$REPO" "toolchains/$NAME"
+
+            echo "Cloning toolchain: $NAME"
+            echo "Repository: $REPO"
+            echo "Branch: $BRANCH"
+
+            git clone \
+              -b "$BRANCH" \
+              --depth=1 \
+              "$REPO" \
+              "toolchains/$NAME"
+
           done
 
+
+      # ---------------------------------------------------------
+      # KERNELSU NEXT + MANUAL HOOKS
+      # ---------------------------------------------------------
       - name: Update KernelSU Next & Apply Manual Hooks
         if: ${{ matrix.withKernelSU == true }}
+
         run: |
           cd workdir/kernel_workspace
-          
-          echo "Injecting KernelSU Next (Legacy branch)..."
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s legacy
-          
-          echo "Downloading automated system call hook patchset..."
-          curl -O https://raw.githubusercontent.com/JackA1ltman/NonGKI_Kernel_Build_2nd/mainline/Patches/syscall_hook_patches.sh
+
+          echo "=========================================="
+          echo "Injecting KernelSU Next..."
+          echo "=========================================="
+
+          curl -LSs \
+            "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" \
+            | bash -s legacy
+
+
+          echo ""
+          echo "=========================================="
+          echo "Downloading automated system call hooks..."
+          echo "=========================================="
+
+          curl -O \
+            https://raw.githubusercontent.com/JackA1ltman/NonGKI_Kernel_Build_2nd/mainline/Patches/syscall_hook_patches.sh
+
           bash syscall_hook_patches.sh
-          
-          echo "Injecting mandatory config flags into defconfig..."
+
+
+          echo ""
+          echo "=========================================="
+          echo "Injecting KernelSU config flags..."
+          echo "=========================================="
+
           TARGET_CONFIG="arch/arm64/configs/${{ matrix.kernelSource.defconfig }}"
+
           echo "CONFIG_KSU=y" >> "$TARGET_CONFIG"
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> "$TARGET_CONFIG"
-          
-          echo "Applying legacy compiler compatibility fix (bcmp -> memcmp)..."
+
+
+          echo ""
+          echo "=========================================="
+          echo "Applying compiler compatibility fix..."
+          echo "=========================================="
+
           if [ -f scripts/kconfig/confdata.c ]; then
-            sed -i 's/bcmp/memcmp/g' scripts/kconfig/confdata.c
-          fi
-          
-          echo "Applying WALT header return type fix..."
-          if [ -f kernel/sched/walt/walt.h ]; then
-            sed -i 's/static inline int cpu_boost_init(void) { }/static inline int cpu_boost_init(void) { return 0; }/g' kernel/sched/walt/walt.h
-            sed -i 's/static inline int cpu_boost_init(void) {}/static inline int cpu_boost_init(void) { return 0; }/g' kernel/sched/walt/walt.h
+            sed -i 's/bcmp/memcmp/g' \
+              scripts/kconfig/confdata.c
           fi
 
-          echo "Applying dummy NOHZ_KICK_MASK fix for WALT scheduler (qc_vas.c)..."
+
+          echo ""
+          echo "=========================================="
+          echo "Applying WALT header return type fix..."
+          echo "=========================================="
+
+          if [ -f kernel/sched/walt/walt.h ]; then
+
+            sed -i \
+              's/static inline int cpu_boost_init(void) { }/static inline int cpu_boost_init(void) { return 0; }/g' \
+              kernel/sched/walt/walt.h
+
+            sed -i \
+              's/static inline int cpu_boost_init(void) {}/static inline int cpu_boost_init(void) { return 0; }/g' \
+              kernel/sched/walt/walt.h
+
+          fi
+
+
+          echo ""
+          echo "=========================================="
+          echo "Applying NOHZ_KICK_MASK fix..."
+          echo "=========================================="
+
           if [ -f kernel/sched/walt/qc_vas.c ]; then
+
             cat << 'EOF' > patch_nohz.h
           #include <linux/atomic.h>
+
           #ifndef NOHZ_KICK_MASK
           #define NOHZ_KICK_MASK 0
+
           static atomic_t dummy_nohz_flags = ATOMIC_INIT(0);
+
           #define nohz_flags(cpu) (&dummy_nohz_flags)
+
           #endif
           EOF
-          
+
+            cat patch_nohz.h \
+              kernel/sched/walt/qc_vas.c \
+              > temp_qc.c
+
+            mv temp_qc.c \
+              kernel/sched/walt/qc_vas.c
+
+            rm patch_nohz.h
+
+          fi
+
+
+          echo ""
+          echo "=========================================="
+          echo "Applying EAS sched_energy_present fix..."
+          echo "=========================================="
+
+          if [ -f kernel/sched/fair.c ]; then
+
+            sed -i \
+              's/static_branch_unlikely(&sched_energy_present)/sched_energy_enabled()/g' \
+              kernel/sched/fair.c
+
+            sed -i \
+              's/static_branch_likely(&sched_energy_present)/sched_energy_enabled()/g' \
+              kernel/sched/fair.c
+
+          fi
+
+
+          echo ""
+          echo "=========================================="
+          echo "Disabling buggy Qualcomm RMNET SHS..."
+          echo "=========================================="
+
+          if [ -d techpack/datarmnet-ext/shs ]; then
+
+            rm -rf \
+              techpack/datarmnet-ext/shs
+
+            mkdir -p \
+              techpack/datarmnet-ext/shs
+
+            echo "obj- := " \
+              > techpack/datarmnet-ext/shs/Makefile
+
+          fi
+
+
+          if [ -f techpack/datarmnet-ext/Makefile ]; then
+
+            sed -i \
+              's/obj-y += shs\// /g' \
+              techpack/datarmnet-ext/Makefile
+
+            sed -i \
+              's/obj-$(CONFIG_RMNET_SHS) += shs\// /g' \
+              techpack/datarmnet-ext/Makefile
+
+          fi
+
+
+      # ---------------------------------------------------------
+      # SET TOOLCHAIN PATH
+      # ---------------------------------------------------------
+      - name: Set Toolchain Path Environmental Variables
+        run: |
+          find \
+            "$GITHUB_WORKSPACE/workdir/toolchains" \
+            -type d \
+            -name "bin" \
+            | while read -r bin_path; do
+
+                echo "$bin_path" >> "$GITHUB_PATH"
+
+              done
+
+
+      # ---------------------------------------------------------
+      # COMPILE ANDROID KERNEL
+      # ---------------------------------------------------------
+      - name: Compile Android Kernel
+        run: |
+
+          cd workdir/kernel_workspace
+
+          export ARCH=${{ matrix.params.ARCH }}
+          export CROSS_COMPILE=${{ matrix.params.CROSS_COMPILE }}
+          export CROSS_COMPILE_ARM32=${{ matrix.params.CROSS_COMPILE_ARM32 }}
+          export CLANG_TRIPLE=${{ matrix.params.CLANG_TRIPLE }}
+          export CC=${{ matrix.params.CC }}
+
+
+          echo "=========================================="
+          echo "Generating base configuration..."
+          echo "=========================================="
+
+          make \
+            O=out \
+            ARCH=$ARCH \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            ${{ matrix.kernelSource.defconfig }}
+
+
+          echo ""
+          echo "=========================================="
+          echo "Resolving missing configuration options..."
+          echo "=========================================="
+
+          make \
+            O=out \
+            ARCH=$ARCH \
+            CC=clang \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            olddefconfig
+
+
+          echo ""
+          echo "=========================================="
+          echo "Generating SELinux headers..."
+          echo "=========================================="
+
+          mkdir -p security/selinux/include
+
+          cat << 'EOF' > gen_selinux.py
+          import re
+
+          with open(
+              "security/selinux/include/classmap.h",
+              "r"
+          ) as f:
+              content = f.read()
+
+          content = re.sub(
+              r'/\*.*?\*/',
+              '',
+              content,
+              flags=re.DOTALL
+          )
+
+          content = re.sub(
+              r'//.*',
+              '',
+              content
+          )
+
+          matches = re.findall(
+              r'\{\s*"(\w+)"\s*,\s*\{([^}]+)\}',
+              content
+          )
+
+          with open(
+              "security/selinux/include/flask.h",
+              "w"
+          ) as f_flask, open(
+              "security/selinux/include/av_permissions.h",
+              "w"
+          ) as f_av:
+
+              f_flask.write(
+                  "#ifndef _SELINUX_FLASK_H_\n"
+                  "#define _SELINUX_FLASK_H_\n"
+              )
+
+              f_av.write(
+                  "#ifndef _SELINUX_AV_PERMISSIONS_H_\n"
+                  "#define _SELINUX_AV_PERMISSIONS_H_\n"
+              )
+
+              for i, (cls, perms_str) in enumerate(
+                  matches,
+                  1
+              ):
+
+                  cls_upper = cls.upper()
+
+                  f_flask.write(
+                      f"#define SECCLASS_{cls_upper} {i}\n"
+                  )
+
+                  perms = re.findall(
+                      r'"(\w+)"',
+                      perms_str
+                  )
+
+                  for j, perm in enumerate(perms):
+
+                      f_av.write(
+                          f"#define "
+                          f"{cls_upper}__"
+                          f"{perm.upper()} "
+                          f"(1UL << {j})\n"
+                      )
+
+              f_flask.write("#endif\n")
+              f_av.write("#endif\n")
+          EOF
+
+          python3 gen_selinux.py
+
+
+          echo ""
+          echo "=========================================="
+          echo "Mirroring SELinux headers..."
+          echo "=========================================="
+
+          mkdir -p \
+            out/security/selinux/include
+
+          cp \
+            security/selinux/include/flask.h \
+            out/security/selinux/include/ \
+            || true
+
+          cp \
+            security/selinux/include/av_permissions.h \
+            out/security/selinux/include/ \
+            || true
+
+
+          echo ""
+          echo "=========================================="
+          echo "Injecting KernelSU include paths..."
+          echo "=========================================="
+
+          find drivers/kernelsu \
+            -name "Makefile" \
+            -exec sh -c \
+            'echo "ccflags-y += -I\$(srctree)/security/selinux/include -I\$(objtree)/security/selinux/include -DSECINITSID_NUM=27 -DCONFIG_SECURITY_SELINUX_SIDTAB_HASH_BITS=9" >> "{}"' \;
+
+
+          echo ""
+          echo "=========================================="
+          echo "Starting final kernel build..."
+          echo "=========================================="
+
+          make \
+            -j$(nproc --all) \
+            O=out \
+            ARCH=$ARCH \
+            CC=$CC \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=$CROSS_COMPILE \
+            CROSS_COMPILE_ARM32=$CROSS_COMPILE_ARM32
+
+
+      # ---------------------------------------------------------
+      # UPLOAD BUILD OUTPUT
+      # ---------------------------------------------------------
+      - name: Upload Compiled Flashable Images
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: Build-${{ matrix.kernelSource.name }}-${{ matrix.kernelSource.device }}
+
+          path: |
+            workdir/kernel_workspace/out/arch/arm64/boot/Image
+            workdir/kernel_workspace/out/arch/arm64/boot/Image.gz
+            workdir/kernel_workspace/out/arch/arm64/boot/dtb
+            workdir/kernel_workspace/out/arch/arm64/boot/dtbo.img
+
+          if-no-files-found: error
