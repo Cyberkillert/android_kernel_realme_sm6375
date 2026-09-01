@@ -8,8 +8,16 @@ jobs:
     runs-on: ubuntu-24.04
 
     steps:
+      # ============================================================
+      # CHECKOUT
+      # ============================================================
+
       - name: Checkout Source
         uses: actions/checkout@v4
+
+      # ============================================================
+      # DEPENDENCIES
+      # ============================================================
 
       - name: Install Dependencies
         run: |
@@ -36,6 +44,10 @@ jobs:
             binutils-aarch64-linux-gnu \
             binutils-arm-linux-gnueabi
 
+      # ============================================================
+      # CLANG + ANYKERNEL3
+      # ============================================================
+
       - name: Clone Proton Clang + AnyKernel3
         run: |
           git clone --depth=1 \
@@ -44,8 +56,14 @@ jobs:
           git clone --depth=1 \
             https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel + DTBS + Modules
+      # ============================================================
+      # BUILD KERNEL
+      # ============================================================
+
+      - name: Build Kernel
         run: |
+          set -e
+
           export PATH=$PWD/clang/bin:$PATH
 
           export ARCH=arm64
@@ -66,255 +84,305 @@ jobs:
 
           mkdir -p out
 
-          echo "========================="
+          echo "========================================"
           echo " USING DEFCONFIG "
-          echo "========================="
+          echo "========================================"
 
           make $MAKE_ARGS vendor/holi-qgki_defconfig
 
-          echo "========================="
-          echo " PATCH CONFIG "
-          echo "========================="
+          echo "========================================"
+          echo " PATCHING KERNEL CONFIG "
+          echo "========================================"
 
+          # --------------------------------------------------------
           # Section mismatch warning only
-          if grep -q "# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set" out/.config; then
+          # --------------------------------------------------------
+
+          if grep -q "^# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set" out/.config; then
             sed -i \
-              's/# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set/CONFIG_SECTION_MISMATCH_WARN_ONLY=y/g' \
+              's/^# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set/CONFIG_SECTION_MISMATCH_WARN_ONLY=y/' \
               out/.config
-          else
+          elif ! grep -q "^CONFIG_SECTION_MISMATCH_WARN_ONLY=" out/.config; then
             echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> out/.config
           fi
 
-          # Enable modules
-          if grep -q "# CONFIG_MODULES is not set" out/.config; then
+          # --------------------------------------------------------
+          # IMPORTANT:
+          # Disable kernel module support.
+          #
+          # This means drivers that were configured as modules
+          # must be built into the kernel instead.
+          # --------------------------------------------------------
+
+          if grep -q "^CONFIG_MODULES=" out/.config; then
             sed -i \
-              's/# CONFIG_MODULES is not set/CONFIG_MODULES=y/g' \
+              's/^CONFIG_MODULES=.*/# CONFIG_MODULES is not set/' \
               out/.config
+          else
+            echo "# CONFIG_MODULES is not set" >> out/.config
           fi
 
-          # Enable module unload
-          if grep -q "# CONFIG_MODULE_UNLOAD is not set" out/.config; then
-            sed -i \
-              's/# CONFIG_MODULE_UNLOAD is not set/CONFIG_MODULE_UNLOAD=y/g' \
-              out/.config
-          fi
+          # --------------------------------------------------------
+          # Convert EVERY existing =m option to =y
+          #
+          # Example:
+          #
+          # CONFIG_BT=m
+          # becomes
+          # CONFIG_BT=y
+          #
+          # CONFIG_SENSOR=m
+          # becomes
+          # CONFIG_SENSOR=y
+          #
+          # This is the important part for avoiding external .ko
+          # dependencies.
+          # --------------------------------------------------------
 
-          # Disable module signature
           sed -i \
-            's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' \
+            -E 's/^(CONFIG_[A-Za-z0-9_]+)=m$/\1=y/' \
             out/.config
+
+          # --------------------------------------------------------
+          # Disable module signing because modules are not being used
+          # --------------------------------------------------------
+
+          sed -i \
+            -E 's/^CONFIG_MODULE_SIG=.*/# CONFIG_MODULE_SIG is not set/' \
+            out/.config
+
+          sed -i \
+            -E 's/^CONFIG_MODULE_SIG_FORCE=.*/# CONFIG_MODULE_SIG_FORCE is not set/' \
+            out/.config
+
+          # --------------------------------------------------------
+          # Resolve dependencies
+          # --------------------------------------------------------
 
           make $MAKE_ARGS olddefconfig
 
-          echo "========================="
-          echo " VERIFY CONFIG "
-          echo "========================="
+          echo "========================================"
+          echo " VERIFYING MODULE CONFIGURATION "
+          echo "========================================"
 
-          grep SECTION_MISMATCH_WARN_ONLY out/.config || true
+          echo "CONFIG_MODULES:"
+          grep "^CONFIG_MODULES" out/.config || true
 
-          echo "========================="
-          echo " BUILDING KERNEL "
-          echo "========================="
+          echo
+          echo "Remaining module (=m) options:"
+          grep "=m$" out/.config || true
 
-          make -j$(nproc) $MAKE_ARGS \
-            Image \
-            dtbs \
-            modules
+          # --------------------------------------------------------
+          # If any module remains, fail the build.
+          #
+          # This prevents producing a kernel that still depends on
+          # external .ko files.
+          # --------------------------------------------------------
 
-      - name: Install Modules Properly
-        run: |
-          export PATH=$PWD/clang/bin:$PATH
+          if grep -q "=m$" out/.config; then
+            echo
+            echo "ERROR: Kernel still contains module (=m) options!"
+            echo
+            grep "=m$" out/.config
+            exit 1
+          fi
 
-          MAKE_ARGS="
-          ARCH=arm64
-          O=out
-          CC=clang
-          LLVM=1
-          LLVM_IAS=1
-          CROSS_COMPILE=aarch64-linux-gnu-
-          CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          "
+          echo
+          echo "SUCCESS: No external kernel modules configured."
 
-          mkdir -p out/modules_staging
+          echo "========================================"
+          echo " BUILDING KERNEL IMAGE "
+          echo "========================================"
 
-          make $MAKE_ARGS \
-            INSTALL_MOD_PATH=$PWD/out/modules_staging \
-            INSTALL_MOD_STRIP=1 \
-            modules_install
+          make -j$(nproc) $MAKE_ARGS Image
 
-          echo "========================="
-          echo " BUILT MODULES "
-          echo "========================="
+          echo "========================================"
+          echo " VERIFY KERNEL IMAGE "
+          echo "========================================"
 
-          find out/modules_staging -name "*.ko"
+          ls -lh out/arch/arm64/boot/Image
+
+      # ============================================================
+      # PREPARE ANYKERNEL3
+      #
+      # NO DTB
+      # NO MODULES
+      # ONLY KERNEL IMAGE
+      # ============================================================
 
       - name: Prepare AnyKernel3
         run: |
-          echo "========================="
-          echo " COPYING IMAGE "
-          echo "========================="
+          set -e
 
-          cp out/arch/arm64/boot/Image AnyKernel3/
+          echo "========================================"
+          echo " COPYING KERNEL IMAGE "
+          echo "========================================"
 
-          echo "========================="
-          echo " BUILD DTB "
-          echo "========================="
+          cp out/arch/arm64/boot/Image AnyKernel3/Image
 
-          find out/arch/arm64/boot/dts/ -name "*.dtb" \
-            -exec cat {} + > AnyKernel3/dtb
-
-          echo "========================="
-          echo " VERIFY DTB "
-          echo "========================="
+          echo "========================================"
+          echo " VERIFY IMAGE "
+          echo "========================================"
 
           ls -lh AnyKernel3/Image
-          ls -lh AnyKernel3/dtb
 
-          echo "========================="
-          echo " COPY MODULES "
-          echo "========================="
+          # --------------------------------------------------------
+          # Remove DTB if the cloned AnyKernel3 directory contains
+          # one from a template or previous build.
+          # --------------------------------------------------------
 
-          mkdir -p AnyKernel3/modules/vendor/lib/modules/
+          rm -f AnyKernel3/dtb
+          rm -f AnyKernel3/dtb.img
+          rm -f AnyKernel3/dt
+          rm -f AnyKernel3/recovery_dtbo
 
-          KVER=$(ls out/modules_staging/lib/modules/)
+          # --------------------------------------------------------
+          # Remove module directories completely.
+          # --------------------------------------------------------
 
-          # Copy only .ko files
-          find out/modules_staging/lib/modules/$KVER/ -name "*.ko" \
-            -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
+          rm -rf AnyKernel3/modules
 
-          # Copy module metadata
-          cp out/modules_staging/lib/modules/$KVER/modules.* \
-            AnyKernel3/modules/vendor/lib/modules/ || true
+          # --------------------------------------------------------
+          # Remove old generated partition setup directories.
+          # --------------------------------------------------------
 
-          echo "========================="
-          echo " REMOVE SYMLINKS "
-          echo "========================="
+          rm -rf AnyKernel3/boot-files
+          rm -rf AnyKernel3/vendor_boot-files
+          rm -rf AnyKernel3/vendor_kernel_boot-files
+          rm -rf AnyKernel3/init_boot-files
 
-          find AnyKernel3 -type l -delete
-
-          echo "========================="
-          echo " STRIP MODULES "
-          echo "========================="
-
-          export PATH=$PWD/clang/bin:$PATH
-
-          find AnyKernel3/modules/ -name "*.ko" \
-            -exec llvm-strip --strip-debug {} \;
-
-          echo "========================="
-          echo " VERIFY MODULES "
-          echo "========================="
-
-          find AnyKernel3/modules -name "*.ko"
-
-          echo "========================="
-          echo " WRITE ANYKERNEL.SH "
-          echo "========================="
+          echo "========================================"
+          echo " WRITING ANYKERNEL.SH "
+          echo "========================================"
 
           cat > AnyKernel3/anykernel.sh <<'EOF'
           # AnyKernel3 Ramdisk Mod Script
           # osm0sis @ xda-developers
 
           ## AnyKernel setup
+
           # begin properties
           properties() { '
           kernel.string=CosmosKernel for OnePlus Nord CE2 Lite 5G
           do.devicecheck=0
-          do.modules=1
+          do.modules=0
           do.systemless=1
           do.cleanup=1
           do.cleanuponabort=0
+
           device.name1=oscaro
           device.name2=OnePlus Nord CE2 Lite 5G
           device.name3=CPH2409
           device.name4=OP535DL1
           device.name5=
-          supported.versions=15-16
+
+          supported.versions=15-17
           supported.patchlevels=
+          supported.vendorpatchlevels=
           '; } # end properties
 
-          # shell variables
-          block=/dev/block/bootdevice/by-name/boot;
-          is_slot_device=1;
-          ramdisk_compression=auto;
-          patch_vbmeta_flag=auto;
+          ## Boot partition
 
-          ## AnyKernel methods (DO NOT CHANGE)
-          # import patching functions/variables - see for reference
+          BLOCK=boot;
+          IS_SLOT_DEVICE=1;
+          RAMDISK_COMPRESSION=auto;
+          PATCH_VBMETA_FLAG=auto;
+
+          ## AnyKernel methods
+          # import patching functions/variables
           . tools/ak3-core.sh;
 
           ## AnyKernel install
+
           dump_boot;
 
-          # Install DTB
-          if [ -f "$home/dtb" ]; then
-            ui_print " " "Installing kernel DTB...";
-            flash_bootimg_fragment dtb "$home/dtb";
-          else
-            ui_print " " "DTB not found!";
-          fi;
-
-          # Install modules
-          if [ -d "$home/modules" ]; then
-            ui_print " " "Installing kernel modules...";
-            cp -rf "$home/modules/vendor" "$SYSTEM_ROOT/";
-          fi;
-
           write_boot;
+
           ## end install
           EOF
 
-          echo "========================="
-          echo " ANYKERNEL CONFIG "
-          echo "========================="
-
-          # Disable device check
-          sed -i \
-            's/do.devicecheck=1/do.devicecheck=0/g' \
-            AnyKernel3/anykernel.sh
-
-          # Enable A/B slot support
-          sed -i \
-            's/is_slot_device=0/is_slot_device=1/g' \
-            AnyKernel3/anykernel.sh
-
-          # Enable modules
-          sed -i \
-            's/do.modules=0/do.modules=1/g' \
-            AnyKernel3/anykernel.sh
-
-          # Enable systemless
-          sed -i \
-            's/do.systemless=0/do.systemless=1/g' \
-            AnyKernel3/anykernel.sh
-
-          echo "========================="
+          echo "========================================"
           echo " FINAL ANYKERNEL.SH "
-          echo "========================="
+          echo "========================================"
 
           cat AnyKernel3/anykernel.sh
 
-          echo "========================="
+          echo "========================================"
+          echo " VERIFY NO DTB / MODULES "
+          echo "========================================"
+
+          if [ -e AnyKernel3/dtb ] || \
+             [ -e AnyKernel3/dtb.img ] || \
+             [ -e AnyKernel3/dt ]; then
+            echo "ERROR: DTB file still exists!"
+            exit 1
+          fi
+
+          if [ -d AnyKernel3/modules ]; then
+            echo "ERROR: modules directory still exists!"
+            exit 1
+          fi
+
+          echo "No DTB included."
+          echo "No external modules included."
+
+          echo "========================================"
           echo " PACKING ZIP "
-          echo "========================="
+          echo "========================================"
 
           cd AnyKernel3
 
           zip -r9 ../Cyber-Holi-Kernel.zip *
 
+      # ============================================================
+      # VERIFY ZIP
+      # ============================================================
+
       - name: Verify Kernel ZIP
         run: |
-          echo "========================="
+          set -e
+
+          echo "========================================"
           echo " KERNEL ZIP CONTENTS "
-          echo "========================="
+          echo "========================================"
 
           unzip -l Cyber-Holi-Kernel.zip
 
-          echo "========================="
+          echo "========================================"
+          echo " CHECK FOR DTB "
+          echo "========================================"
+
+          if unzip -l Cyber-Holi-Kernel.zip | \
+             grep -E '(^|/)(dtb|dtb\.img|dt|recovery_dtbo)$'; then
+
+            echo "ERROR: DTB found in ZIP!"
+            exit 1
+          fi
+
+          echo "No DTB in ZIP."
+
+          echo "========================================"
+          echo " CHECK FOR EXTERNAL MODULES "
+          echo "========================================"
+
+          if unzip -l Cyber-Holi-Kernel.zip | \
+             grep -E '\.ko$'; then
+
+            echo "ERROR: External .ko modules found in ZIP!"
+            exit 1
+          fi
+
+          echo "No external .ko modules."
+
+          echo "========================================"
           echo " ZIP SIZE "
-          echo "========================="
+          echo "========================================"
 
           ls -lh Cyber-Holi-Kernel.zip
+
+      # ============================================================
+      # UPLOAD
+      # ============================================================
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
