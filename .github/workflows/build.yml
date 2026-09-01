@@ -34,7 +34,7 @@ jobs:
     steps:
 
       # =========================================================
-      # CHECKOUT BUILDER
+      # CHECKOUT
       # =========================================================
 
       - name: Checkout Builder
@@ -42,7 +42,7 @@ jobs:
 
 
       # =========================================================
-      # CREATE WORKING DIRECTORY
+      # WORK DIRECTORY
       # =========================================================
 
       - name: Create Working Directory
@@ -51,7 +51,7 @@ jobs:
 
 
       # =========================================================
-      # INSTALL PREREQUISITES
+      # PREREQUISITES
       # =========================================================
 
       - name: Install Prerequisites
@@ -80,11 +80,13 @@ jobs:
             build-essential \
             ccache \
             jq \
-            libelf-dev
+            libelf-dev \
+            lz4 \
+            libncurses-dev
 
 
       # =========================================================
-      # CLONE KERNEL SOURCE
+      # CLONE KERNEL
       # =========================================================
 
       - name: Clone Kernel Source
@@ -94,6 +96,7 @@ jobs:
           echo "=========================================="
 
           git clone \
+            --depth=1 \
             -b "${{ matrix.kernelSource.branch }}" \
             "${{ matrix.kernelSource.repo }}" \
             workdir/kernel_workspace
@@ -123,7 +126,7 @@ jobs:
           cd workdir/kernel_workspace
 
           echo "=========================================="
-          echo "Disabling SPI CRC by default..."
+          echo "Disabling SPI CRC..."
           echo "=========================================="
 
           if [ -f drivers/mmc/core/core.c ]; then
@@ -135,12 +138,12 @@ jobs:
                 's/bool use_spi_crc = 1;/bool use_spi_crc = 0;/' \
                 drivers/mmc/core/core.c
 
-              echo "SPI CRC successfully disabled."
+              echo "SPI CRC disabled."
 
             elif grep -q "bool use_spi_crc = 0;" \
               drivers/mmc/core/core.c; then
 
-              echo "SPI CRC is already disabled."
+              echo "SPI CRC already disabled."
 
             else
 
@@ -156,7 +159,7 @@ jobs:
 
 
       # =========================================================
-      # ALLOW MISMATCHED KERNEL MODULES
+      # ALLOW MISMATCHED MODULES
       # =========================================================
 
       - name: Allow Mismatched Kernel Modules
@@ -164,7 +167,7 @@ jobs:
           cd workdir/kernel_workspace
 
           echo "=========================================="
-          echo "Allowing mismatched kernel modules..."
+          echo "Patching kernel/module.c..."
           echo "=========================================="
 
           python3 - <<'PY'
@@ -202,7 +205,7 @@ jobs:
           else:
 
               print(
-                  "Exact bad_version block not found."
+                  "Exact block not found."
               )
 
               print(
@@ -246,10 +249,9 @@ jobs:
                           break
 
               if not found:
-
                   raise SystemExit(
-                      "ERROR: Could not find "
-                      "bad_version() mismatch return."
+                      "ERROR: Could not patch "
+                      "bad_version()."
                   )
 
           PY
@@ -264,7 +266,7 @@ jobs:
           cd workdir/kernel_workspace
 
           echo "=========================================="
-          echo "Verifying module mismatch patch..."
+          echo "Module patch verification"
           echo "=========================================="
 
           grep -n \
@@ -275,65 +277,65 @@ jobs:
 
 
       # =========================================================
-      # DOWNLOAD CLANG
+      # DOWNLOAD ANDROID CLANG 21
       # =========================================================
 
-      - name: Download Toolchain
+      - name: Download Android Clang 21
         run: |
           cd workdir
 
           mkdir -p toolchains
 
           echo "=========================================="
-          echo "Downloading Clang toolchain..."
+          echo "Downloading Android Clang r563880c..."
           echo "=========================================="
 
           git clone \
             --depth=1 \
-            https://github.com/ZyCromerZ/Clang.git \
+            --filter=blob:none \
+            --sparse \
+            https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
             toolchains/clang
 
-          echo ""
-          echo "Clang downloaded successfully."
+          cd toolchains/clang
+
+          git sparse-checkout set clang-r563880c
 
           echo ""
           echo "Checking Clang..."
 
-          if [ -f toolchains/clang/bin/clang ]; then
-            toolchains/clang/bin/clang --version
-          else
-            echo "ERROR: clang binary not found."
-            find toolchains/clang -maxdepth 3 -type f | head -50
+          if [ ! -x clang-r563880c/bin/clang ]; then
+            echo "ERROR: clang-r563880c/bin/clang not found."
             exit 1
           fi
 
+          clang-r563880c/bin/clang --version
+
 
       # =========================================================
-      # SET TOOLCHAIN PATH
+      # SET CLANG PATH
       # =========================================================
 
-      - name: Set Toolchain Path
+      - name: Set Android Clang Path
         run: |
+          CLANG_BIN="$GITHUB_WORKSPACE/workdir/toolchains/clang/clang-r563880c/bin"
+
+          if [ ! -x "$CLANG_BIN/clang" ]; then
+            echo "ERROR: Clang binary not found."
+            exit 1
+          fi
+
+          echo "$CLANG_BIN" >> "$GITHUB_PATH"
+
           echo "=========================================="
-          echo "Adding toolchains to PATH..."
+          echo "Using Android Clang:"
           echo "=========================================="
 
-          find \
-            "$GITHUB_WORKSPACE/workdir/toolchains" \
-            -type d \
-            -name bin \
-            | while read -r bin_path; do
-
-                echo "$bin_path" >> "$GITHUB_PATH"
-
-                echo "Added:"
-                echo "$bin_path"
-
-              done
+          "$CLANG_BIN/clang" --version
 
 
       # =========================================================
-      # UPDATE KERNELSU NEXT
+      # KERNELSU NEXT
       # =========================================================
 
       - name: Update KernelSU Next & Apply Manual Hooks
@@ -352,9 +354,7 @@ jobs:
 
 
           echo ""
-          echo "=========================================="
           echo "Downloading syscall hook patchset..."
-          echo "=========================================="
 
           curl -O \
             "https://raw.githubusercontent.com/JackA1ltman/NonGKI_Kernel_Build_2nd/mainline/Patches/syscall_hook_patches.sh"
@@ -362,10 +362,12 @@ jobs:
           bash syscall_hook_patches.sh
 
 
+          # =====================================================
+          # KSU CONFIG
+          # =====================================================
+
           echo ""
-          echo "=========================================="
-          echo "Injecting KernelSU config..."
-          echo "=========================================="
+          echo "Injecting KernelSU configuration..."
 
           TARGET_CONFIG="arch/arm64/configs/${{ matrix.kernelSource.defconfig }}"
 
@@ -380,18 +382,16 @@ jobs:
 
 
           # =====================================================
-          # BCMP -> MEMCMP
+          # BCMP FIX
           # =====================================================
 
           echo ""
           echo "Applying bcmp -> memcmp fix..."
 
           if [ -f scripts/kconfig/confdata.c ]; then
-
             sed -i \
               's/bcmp/memcmp/g' \
               scripts/kconfig/confdata.c
-
           fi
 
 
@@ -400,7 +400,7 @@ jobs:
           # =====================================================
 
           echo ""
-          echo "Applying WALT header fix..."
+          echo "Applying WALT fix..."
 
           if [ -f kernel/sched/walt/walt.h ]; then
 
@@ -416,7 +416,7 @@ jobs:
 
 
           # =====================================================
-          # NOHZ KICK MASK FIX
+          # NOHZ FIX
           # =====================================================
 
           echo ""
@@ -473,11 +473,11 @@ jobs:
 
 
           # =====================================================
-          # RMNET SHS BYPASS
+          # RMNET SHS FIX
           # =====================================================
 
           echo ""
-          echo "Applying Qualcomm RMNET SHS bypass..."
+          echo "Applying RMNET SHS bypass..."
 
           if [ -d techpack/datarmnet-ext/shs ]; then
 
@@ -521,23 +521,19 @@ jobs:
           export CLANG_TRIPLE="${{ matrix.params.CLANG_TRIPLE }}"
           export CC="${{ matrix.params.CC }}"
 
-          export PATH="$GITHUB_WORKSPACE/workdir/toolchains/clang/bin:$PATH"
+          export CLANG_PATH="$GITHUB_WORKSPACE/workdir/toolchains/clang/clang-r563880c/bin"
+          export PATH="$CLANG_PATH:$PATH"
 
           echo "=========================================="
-          echo "Toolchain information"
+          echo "Compiler"
           echo "=========================================="
 
-          which clang || true
-          clang --version || true
-
-
-          # =====================================================
-          # GENERATE DEFCONFIG
-          # =====================================================
+          which clang
+          clang --version
 
           echo ""
           echo "=========================================="
-          echo "Generating kernel configuration..."
+          echo "Generating defconfig"
           echo "=========================================="
 
           make \
@@ -554,7 +550,7 @@ jobs:
           # =====================================================
 
           echo ""
-          echo "Resolving missing configuration options..."
+          echo "Resolving configuration..."
 
           make \
             O=out \
@@ -571,7 +567,7 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "Kernel configuration"
+          echo "Important kernel configuration"
           echo "=========================================="
 
           grep -E \
@@ -580,7 +576,7 @@ jobs:
 
 
           # =====================================================
-          # SELINUX HEADERS
+          # SELINUX
           # =====================================================
 
           echo ""
@@ -669,7 +665,7 @@ jobs:
 
 
           # =====================================================
-          # MIRROR SELINUX HEADERS
+          # COPY SELINUX HEADERS
           # =====================================================
 
           mkdir -p \
@@ -687,13 +683,13 @@ jobs:
 
 
           # =====================================================
-          # KERNELSU INCLUDE PATHS
+          # KSU INCLUDE PATH
           # =====================================================
 
-          echo ""
-          echo "Injecting KernelSU include paths..."
-
           if [ -d drivers/kernelsu ]; then
+
+            echo ""
+            echo "Injecting KernelSU include paths..."
 
             find \
               drivers/kernelsu \
@@ -711,7 +707,7 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "Starting final kernel build..."
+          echo "Starting final kernel build"
           echo "=========================================="
 
           make \
@@ -748,20 +744,23 @@ jobs:
 
             echo ""
             echo "=========================================="
-            echo "SUCCESS: Kernel Image generated."
+            echo "SUCCESS"
+            echo "Kernel Image generated."
             echo "=========================================="
 
           else
 
             echo ""
-            echo "ERROR: Kernel Image was not generated."
+            echo "ERROR"
+            echo "Kernel Image was not generated."
+
             exit 1
 
           fi
 
 
       # =========================================================
-      # UPLOAD KERNEL
+      # UPLOAD
       # =========================================================
 
       - name: Upload Compiled Kernel
