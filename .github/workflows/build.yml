@@ -30,11 +30,6 @@ jobs:
               CLANG_TRIPLE: "aarch64-linux-gnu-"
               CC: clang
 
-            toolchains:
-              - name: "clang"
-                repo: "https://github.com/ZyCromerZ/Clang.git"
-                branch: "19"
-
 
     steps:
 
@@ -149,15 +144,13 @@ jobs:
 
             else
 
-              echo "WARNING:"
-              echo "use_spi_crc declaration not found."
+              echo "WARNING: use_spi_crc declaration not found."
 
             fi
 
           else
 
-            echo "WARNING:"
-            echo "drivers/mmc/core/core.c not found."
+            echo "WARNING: drivers/mmc/core/core.c not found."
 
           fi
 
@@ -196,10 +189,6 @@ jobs:
                   info->name, symname);
           return 1;'''
 
-          # -----------------------------------------------------
-          # Exact match
-          # -----------------------------------------------------
-
           if old in data:
 
               path.write_text(
@@ -207,8 +196,7 @@ jobs:
               )
 
               print(
-                  "Successfully patched bad_version() "
-                  "using exact match."
+                  "Successfully patched bad_version()."
               )
 
           else:
@@ -247,16 +235,11 @@ jobs:
                               )
 
                               print(
-                                  "Changed:"
-                              )
-
-                              print(
-                                  f"line {j + 1}: "
-                                  "return 0; -> return 1;"
+                                  f"Changed return 0 -> return 1 "
+                                  f"at line {j + 1}"
                               )
 
                               found = True
-
                               break
 
                       if found:
@@ -269,9 +252,6 @@ jobs:
                       "bad_version() mismatch return."
                   )
 
-          print(
-              "Module mismatch patch completed."
-          )
           PY
 
 
@@ -284,7 +264,7 @@ jobs:
           cd workdir/kernel_workspace
 
           echo "=========================================="
-          echo "Verifying module patch..."
+          echo "Verifying module mismatch patch..."
           echo "=========================================="
 
           grep -n \
@@ -295,41 +275,61 @@ jobs:
 
 
       # =========================================================
-      # DOWNLOAD TOOLCHAINS
+      # DOWNLOAD CLANG
       # =========================================================
 
-      - name: Download Toolchains
+      - name: Download Toolchain
         run: |
           cd workdir
 
           mkdir -p toolchains
 
-          cat > toolchains.json <<'EOF'
-          ${{ toJSON(matrix.toolchains) }}
-          EOF
-
           echo "=========================================="
-          echo "Downloading toolchains..."
+          echo "Downloading Clang toolchain..."
           echo "=========================================="
 
-          jq -c '.[]' toolchains.json | while read -r toolchain; do
+          git clone \
+            --depth=1 \
+            https://github.com/ZyCromerZ/Clang.git \
+            toolchains/clang
 
-            REPO=$(echo "$toolchain" | jq -r '.repo')
-            BRANCH=$(echo "$toolchain" | jq -r '.branch')
-            NAME=$(echo "$toolchain" | jq -r '.name')
+          echo ""
+          echo "Clang downloaded successfully."
 
-            echo ""
-            echo "Toolchain: $NAME"
-            echo "Repository: $REPO"
-            echo "Branch: $BRANCH"
+          echo ""
+          echo "Checking Clang..."
 
-            git clone \
-              -b "$BRANCH" \
-              --depth=1 \
-              "$REPO" \
-              "toolchains/$NAME"
+          if [ -f toolchains/clang/bin/clang ]; then
+            toolchains/clang/bin/clang --version
+          else
+            echo "ERROR: clang binary not found."
+            find toolchains/clang -maxdepth 3 -type f | head -50
+            exit 1
+          fi
 
-          done
+
+      # =========================================================
+      # SET TOOLCHAIN PATH
+      # =========================================================
+
+      - name: Set Toolchain Path
+        run: |
+          echo "=========================================="
+          echo "Adding toolchains to PATH..."
+          echo "=========================================="
+
+          find \
+            "$GITHUB_WORKSPACE/workdir/toolchains" \
+            -type d \
+            -name bin \
+            | while read -r bin_path; do
+
+                echo "$bin_path" >> "$GITHUB_PATH"
+
+                echo "Added:"
+                echo "$bin_path"
+
+              done
 
 
       # =========================================================
@@ -364,7 +364,7 @@ jobs:
 
           echo ""
           echo "=========================================="
-          echo "Injecting KernelSU configuration..."
+          echo "Injecting KernelSU config..."
           echo "=========================================="
 
           TARGET_CONFIG="arch/arm64/configs/${{ matrix.kernelSource.defconfig }}"
@@ -384,7 +384,7 @@ jobs:
           # =====================================================
 
           echo ""
-          echo "Applying bcmp -> memcmp compatibility fix..."
+          echo "Applying bcmp -> memcmp fix..."
 
           if [ -f scripts/kconfig/confdata.c ]; then
 
@@ -400,7 +400,7 @@ jobs:
           # =====================================================
 
           echo ""
-          echo "Applying WALT header return type fix..."
+          echo "Applying WALT header fix..."
 
           if [ -f kernel/sched/walt/walt.h ]; then
 
@@ -507,30 +507,6 @@ jobs:
 
 
       # =========================================================
-      # SET TOOLCHAIN PATH
-      # =========================================================
-
-      - name: Set Toolchain Path
-        run: |
-          echo "=========================================="
-          echo "Adding toolchains to PATH..."
-          echo "=========================================="
-
-          find \
-            "$GITHUB_WORKSPACE/workdir/toolchains" \
-            -type d \
-            -name "bin" \
-            | while read -r bin_path; do
-
-                echo "$bin_path" >> "$GITHUB_PATH"
-
-                echo "Added:"
-                echo "$bin_path"
-
-              done
-
-
-      # =========================================================
       # BUILD KERNEL
       # =========================================================
 
@@ -545,20 +521,24 @@ jobs:
           export CLANG_TRIPLE="${{ matrix.params.CLANG_TRIPLE }}"
           export CC="${{ matrix.params.CC }}"
 
+          export PATH="$GITHUB_WORKSPACE/workdir/toolchains/clang/bin:$PATH"
 
           echo "=========================================="
-          echo "Kernel configuration"
+          echo "Toolchain information"
           echo "=========================================="
 
-          echo "ARCH=$ARCH"
-          echo "CC=$CC"
-          echo "CLANG_TRIPLE=$CLANG_TRIPLE"
-          echo "DEFCONFIG=${{ matrix.kernelSource.defconfig }}"
+          which clang || true
+          clang --version || true
 
 
           # =====================================================
-          # BASE DEFCONFIG
+          # GENERATE DEFCONFIG
           # =====================================================
+
+          echo ""
+          echo "=========================================="
+          echo "Generating kernel configuration..."
+          echo "=========================================="
 
           make \
             O=out \
@@ -586,16 +566,16 @@ jobs:
 
 
           # =====================================================
-          # SHOW IMPORTANT CONFIG
+          # SHOW CONFIG
           # =====================================================
 
           echo ""
           echo "=========================================="
-          echo "Kernel configuration status"
+          echo "Kernel configuration"
           echo "=========================================="
 
           grep -E \
-            "CONFIG_KSU=|CONFIG_MODVERSIONS=|CONFIG_MODULES=" \
+            "CONFIG_KSU=|CONFIG_MODULES=|CONFIG_MODVERSIONS=" \
             out/.config || true
 
 
@@ -610,7 +590,6 @@ jobs:
 
           mkdir -p \
             security/selinux/include
-
 
           cat << 'EOF' > gen_selinux.py
           import re
@@ -686,16 +665,12 @@ jobs:
               f_av.write("#endif\n")
           EOF
 
-
           python3 gen_selinux.py
 
 
           # =====================================================
-          # COPY SELINUX HEADERS TO OUT
+          # MIRROR SELINUX HEADERS
           # =====================================================
-
-          echo ""
-          echo "Mirroring generated SELinux headers..."
 
           mkdir -p \
             out/security/selinux/include
@@ -735,4 +710,70 @@ jobs:
           # =====================================================
 
           echo ""
-          echo "===
+          echo "=========================================="
+          echo "Starting final kernel build..."
+          echo "=========================================="
+
+          make \
+            -j"$(nproc --all)" \
+            O=out \
+            ARCH="$ARCH" \
+            CC="$CC" \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE="$CROSS_COMPILE" \
+            CROSS_COMPILE_ARM32="$CROSS_COMPILE_ARM32"
+
+
+      # =========================================================
+      # VERIFY BUILD
+      # =========================================================
+
+      - name: Verify Build Output
+        run: |
+
+          cd workdir/kernel_workspace
+
+          echo "=========================================="
+          echo "Checking kernel output..."
+          echo "=========================================="
+
+          find \
+            out/arch/arm64/boot \
+            -maxdepth 1 \
+            -type f \
+            -print || true
+
+          if [ -f out/arch/arm64/boot/Image ]; then
+
+            echo ""
+            echo "=========================================="
+            echo "SUCCESS: Kernel Image generated."
+            echo "=========================================="
+
+          else
+
+            echo ""
+            echo "ERROR: Kernel Image was not generated."
+            exit 1
+
+          fi
+
+
+      # =========================================================
+      # UPLOAD KERNEL
+      # =========================================================
+
+      - name: Upload Compiled Kernel
+        uses: actions/upload-artifact@v4
+
+        with:
+          name: Build-${{ matrix.kernelSource.name }}-${{ matrix.kernelSource.device }}
+
+          path: |
+            workdir/kernel_workspace/out/arch/arm64/boot/Image
+            workdir/kernel_workspace/out/arch/arm64/boot/Image.gz
+            workdir/kernel_workspace/out/arch/arm64/boot/dtb
+            workdir/kernel_workspace/out/arch/arm64/boot/dtbo.img
+
+          if-no-files-found: error
