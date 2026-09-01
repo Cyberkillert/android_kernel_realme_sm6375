@@ -44,6 +44,34 @@ jobs:
         run: |
           git clone -b ${{ matrix.kernelSource.branch }} ${{ matrix.kernelSource.repo }} workdir/kernel_workspace
 
+          cd workdir/kernel_workspace
+
+          echo "Disabling SPI CRC by default..."
+          sed -i 's/bool use_spi_crc = 1;/bool use_spi_crc = 0;/' drivers/mmc/core/core.c
+
+          echo "Allowing mismatched kernel modules to load..."
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("kernel/module.c")
+          data = path.read_text()
+
+          old = '''bad_version:
+          pr_warn("%s: disagrees about version of symbol %s\\n",
+                  info->name, symname);
+          return 0;'''
+
+          new = '''bad_version:
+          pr_warn("%s: disagrees about version of symbol but we'll look past that... %s\\n",
+                  info->name, symname);
+          return 1;'''
+
+          if old not in data:
+              raise SystemExit("ERROR: bad_version block not found in kernel/module.c")
+
+          path.write_text(data.replace(old, new, 1))
+          PY
+
       - name: Download Toolchains
         run: |
           cd workdir
@@ -84,7 +112,7 @@ jobs:
             sed -i 's/static inline int cpu_boost_init(void) { }/static inline int cpu_boost_init(void) { return 0; }/g' kernel/sched/walt/walt.h
             sed -i 's/static inline int cpu_boost_init(void) {}/static inline int cpu_boost_init(void) { return 0; }/g' kernel/sched/walt/walt.h
           fi
-          
+
           echo "Applying dummy NOHZ_KICK_MASK fix for WALT scheduler (qc_vas.c)..."
           if [ -f kernel/sched/walt/qc_vas.c ]; then
             cat << 'EOF' > patch_nohz.h
@@ -182,4 +210,3 @@ jobs:
             workdir/kernel_workspace/out/arch/arm64/boot/dtb
             workdir/kernel_workspace/out/arch/arm64/boot/dtbo.img
           if-no-files-found: error
-          
