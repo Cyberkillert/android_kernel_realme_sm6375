@@ -1,140 +1,224 @@
-name: Build Android Kernel (Cyber-Official-Spec)
+name: Build Android Kernel Holi Official
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
-      - name: Checkout source
+      - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           sudo apt update
+
           sudo apt install -y \
-            bc bison build-essential flex git curl \
-            libssl-dev libelf-dev libncurses-dev \
-            python3 unzip zip cpio \
+            bc \
+            bison \
+            build-essential \
+            flex \
+            git \
+            curl \
+            libssl-dev \
+            libelf-dev \
+            libncurses-dev \
+            python3 \
+            unzip \
+            zip \
+            cpio \
+            rsync \
+            device-tree-compiler \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu \
             binutils-arm-linux-gnueabi
-      # ✅ FIX 1: Use neutron-clang instead of abandoned proton-clang
-      - name: Clone Toolchain & AnyKernel
-        run: |
-          mkdir -p clang
-          cd clang
-          curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
-          chmod +x antman
-          ./antman -S
-          cd ..
-          git clone --depth=1 https://github.com/osm0sis/AnyKernel3
 
-      - name: Build Kernel 5.4 (Match BoardConfig)
+      - name: Clone Proton Clang + AnyKernel3
+        run: |
+          git clone --depth=1 \
+            https://gitlab.com/LeCmnGend/proton-clang clang
+
+          git clone --depth=1 \
+            https://github.com/osm0sis/AnyKernel3
+
+      - name: Build Kernel + DTBS + Modules
         run: |
           export PATH=$PWD/clang/bin:$PATH
-          export ARCH=arm64
-          CUSTOM_NAME="-lineageos-Cyber-Holi"
 
-          MAKE_FLAGS=(
-            ARCH=arm64
-            O=out
-            CC=clang
-            LLVM=1
-            LLVM_IAS=1
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LOCALVERSION=$CUSTOM_NAME
-          )
+          export ARCH=arm64
+          export SUBARCH=arm64
+
+          KERNEL_NAME="-Cyber-Holi"
+
+          MAKE_ARGS="
+          ARCH=arm64
+          O=out
+          CC=clang
+          LLVM=1
+          LLVM_IAS=1
+          CROSS_COMPILE=aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          LOCALVERSION=${KERNEL_NAME}
+          "
 
           mkdir -p out
-          make "${MAKE_FLAGS[@]}" vendor/holi-qgki_defconfig
 
-          # --- APPLY BOARDCONFIG SPECS ---
-          ./scripts/config --file out/.config -e CONFIG_ARM64_4K_PAGES
+          echo "========================="
+          echo " USING DEFCONFIG "
+          echo "========================="
 
-          # ✅ FIX 2: Remove the MODULE_FORCE_LOAD hack and build modules correctly
-          # Do NOT disable MODVERSIONS — let them match naturally via correct build
-          # Do NOT use MODULE_FORCE_LOAD — it causes instability
-          ./scripts/config --file out/.config -d MODULE_SIG
-          ./scripts/config --file out/.config -e CONFIG_MODULES
-          ./scripts/config --file out/.config -e CONFIG_MODULE_UNLOAD
+          make $MAKE_ARGS vendor/holi-qgki_defconfig
 
-          # Realme specific
-          ./scripts/config --file out/.config -e CONFIG_OPLUS_CHG
-          ./scripts/config --file out/.config -e CONFIG_SECTION_MISMATCH_WARN_ONLY
+          echo "========================="
+          echo " PATCH CONFIG "
+          echo "========================="
 
-          make "${MAKE_FLAGS[@]}" olddefconfig
+          # Section mismatch warning only
+          if grep -q "# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set" out/.config; then
+            sed -i 's/# CONFIG_SECTION_MISMATCH_WARN_ONLY is not set/CONFIG_SECTION_MISMATCH_WARN_ONLY=y/g' out/.config
+          else
+            echo "CONFIG_SECTION_MISMATCH_WARN_ONLY=y" >> out/.config
+          fi
 
-          # ✅ FIX 3: Build kernel + modules explicitly (not just 'all')
-          make -j$(nproc) "${MAKE_FLAGS[@]}"
-          make -j$(nproc) "${MAKE_FLAGS[@]}" modules
+          # Enable modules
+          if grep -q "# CONFIG_MODULES is not set" out/.config; then
+            sed -i 's/# CONFIG_MODULES is not set/CONFIG_MODULES=y/g' out/.config
+          fi
 
-      # ✅ FIX 4: Proper modules_install to generate modules.dep, modules.alias etc.
-      - name: Install Modules to Staging
+          # Enable module unload
+          if grep -q "# CONFIG_MODULE_UNLOAD is not set" out/.config; then
+            sed -i 's/# CONFIG_MODULE_UNLOAD is not set/CONFIG_MODULE_UNLOAD=y/g' out/.config
+          fi
+
+          # Disable module signature
+          sed -i 's/CONFIG_MODULE_SIG=y/# CONFIG_MODULE_SIG is not set/g' out/.config
+
+          make $MAKE_ARGS olddefconfig
+
+          echo "========================="
+          echo " VERIFY CONFIG "
+          echo "========================="
+
+          grep SECTION_MISMATCH_WARN_ONLY out/.config || true
+
+          echo "========================="
+          echo " BUILDING KERNEL "
+          echo "========================="
+
+          make -j$(nproc) $MAKE_ARGS \
+            Image \
+            dtbs \
+            modules
+
+      - name: Install Modules Properly
         run: |
           export PATH=$PWD/clang/bin:$PATH
-          CUSTOM_NAME="-lineageos-Cyber-Holi"
 
-          MAKE_FLAGS=(
-            ARCH=arm64
-            O=out
-            CC=clang
-            LLVM=1
-            LLVM_IAS=1
-            CROSS_COMPILE=aarch64-linux-gnu-
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-            LOCALVERSION=$CUSTOM_NAME
-          )
+          MAKE_ARGS="
+          ARCH=arm64
+          O=out
+          CC=clang
+          LLVM=1
+          LLVM_IAS=1
+          CROSS_COMPILE=aarch64-linux-gnu-
+          CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+          "
 
           mkdir -p out/modules_staging
 
-          # This generates modules.dep, modules.alias, modules.softdep — CRITICAL
-          make "${MAKE_FLAGS[@]}" \
+          make $MAKE_ARGS \
             INSTALL_MOD_PATH=$PWD/out/modules_staging \
             INSTALL_MOD_STRIP=1 \
             modules_install
 
-          # Show what was built
-          echo "=== Built modules ==="
-          find out/modules_staging -name "*.ko" | sort
+          echo "========================="
+          echo " BUILT MODULES "
+          echo "========================="
+
+          find out/modules_staging -name "*.ko"
 
       - name: Prepare AnyKernel3
         run: |
-          # AnyKernel3 Setup for A/B + Header V3
-          sed -i 's|block=.*|block=/dev/block/bootdevice/by-name/boot;|g' AnyKernel3/anykernel.sh
-          sed -i 's/is_slot_device=0/is_slot_device=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.modules=0/do.modules=1/g' AnyKernel3/anykernel.sh
-          sed -i 's/do.systemless=0/do.systemless=1/g' AnyKernel3/anykernel.sh
-
-          echo "cmdline=androidboot.hardware=qcom androidboot.memcg=1 lpm_levels.sleep_disabled=1 msm_rtb.filter=0x237 service_locator.enable=1 androidboot.usbcontroller=4e00000.dwc3 swiotlb=0 loop.max_part=7 cgroup.memory=nokmem,nosocket iptable_raw.raw_before_defrag=1 ip6table_raw.raw_before_defrag=1 kpti=off" >> AnyKernel3/anykernel.sh
+          echo "========================="
+          echo " COPYING IMAGE "
+          echo "========================="
 
           cp out/arch/arm64/boot/Image AnyKernel3/
 
-          # ✅ FIX 5: Copy full modules_staging output (includes dep/alias files, not just .ko)
+          echo "========================="
+          echo " BUILD DTB "
+          echo "========================="
+
+          find out/arch/arm64/boot/dts/ -name "*.dtb" \
+            -exec cat {} + > AnyKernel3/dtb
+
+          echo "========================="
+          echo " COPY MODULES "
+          echo "========================="
+
           mkdir -p AnyKernel3/modules/vendor/lib/modules/
+
           KVER=$(ls out/modules_staging/lib/modules/)
-          cp -r out/modules_staging/lib/modules/$KVER/. AnyKernel3/modules/vendor/lib/modules/
 
-          # Rename wlan alias
-          if [ -f AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko ]; then
-            cp AnyKernel3/modules/vendor/lib/modules/qca_cld3_wlan.ko \
-               AnyKernel3/modules/vendor/lib/modules/wlan.ko
-          fi
+          # Copy only .ko files
+          find out/modules_staging/lib/modules/$KVER/ -name "*.ko" \
+            -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
 
-          # ✅ FIX 6: Use llvm-strip from clang toolchain, not host aarch64-linux-gnu-strip
+          # Copy module metadata
+          cp out/modules_staging/lib/modules/$KVER/modules.* \
+            AnyKernel3/modules/vendor/lib/modules/ || true
+
+          echo "========================="
+          echo " REMOVE SYMLINKS "
+          echo "========================="
+
+          find AnyKernel3 -type l -delete
+
+          echo "========================="
+          echo " STRIP MODULES "
+          echo "========================="
+
           export PATH=$PWD/clang/bin:$PATH
-          find AnyKernel3/modules/ -name "*.ko" -exec llvm-strip --strip-debug {} \;
+
+          find AnyKernel3/modules/ -name "*.ko" \
+            -exec llvm-strip --strip-debug {} \;
+
+          echo "========================="
+          echo " VERIFY MODULES "
+          echo "========================="
+
+          find AnyKernel3/modules -name "*.ko"
+
+          echo "========================="
+          echo " ANYKERNEL CONFIG "
+          echo "========================="
+
+          sed -i 's/do.devicecheck=1/do.devicecheck=0/g' \
+            AnyKernel3/anykernel.sh
+
+          sed -i 's/is_slot_device=0/is_slot_device=1/g' \
+            AnyKernel3/anykernel.sh
+
+          sed -i 's/do.modules=0/do.modules=1/g' \
+            AnyKernel3/anykernel.sh
+
+          sed -i 's/do.systemless=0/do.systemless=1/g' \
+            AnyKernel3/anykernel.sh
+
+          echo "========================="
+          echo " PACKING ZIP "
+          echo "========================="
 
           cd AnyKernel3
-          zip -r9 ../Cyber-Final-Holi.zip *
+
+          zip -r9 ../Cyber-Holi-Kernel.zip *
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
+
         with:
-          name: Cyber-Kernel-Official-Match
-          path: ./Cyber-Final-Holi.zip
+          name: Cyber-Holi-Kernel
+          path: Cyber-Holi-Kernel.zip
