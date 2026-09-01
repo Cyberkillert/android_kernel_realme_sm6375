@@ -1,4 +1,4 @@
-name: Build Luigi Kernel - Diagnostic
+name: Build Luigi Kernel And Modules
 
 on:
   workflow_dispatch:
@@ -8,21 +8,19 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-
-      - name: Checkout Exact Kernel
+      - name: Checkout Kernel
         run: |
           set -e
 
-          git clone https://github.com/LineageOS/android_kernel_realme_sm6375.git kernel
+          git clone \
+            https://github.com/Cyberkillert/android_kernel_realme_sm6375.git \
+            kernel
 
           cd kernel
 
           git checkout 84e7d691ee3a094de68628c488847a4dd632e7eb
 
-          echo "========================================"
-          echo "KERNEL COMMIT"
-          echo "========================================"
-
+          echo "===== COMMIT ====="
           git log -1 --oneline
 
       - name: Install Dependencies
@@ -35,55 +33,50 @@ jobs:
             flex \
             build-essential \
             git \
-            curl \
-            wget \
-            unzip \
-            zip \
-            cpio \
-            rsync \
-            python3 \
-            libssl-dev \
-            libelf-dev \
-            libncurses-dev \
-            device-tree-compiler \
+            clang \
+            lld \
+            llvm \
             gcc-aarch64-linux-gnu \
             gcc-arm-linux-gnueabi \
             binutils-aarch64-linux-gnu \
             binutils-arm-linux-gnueabi \
-            clang \
-            lld
+            libssl-dev \
+            libelf-dev \
+            libncurses-dev \
+            python3 \
+            rsync \
+            cpio \
+            zip \
+            unzip
 
-      - name: Verify Toolchain
-        run: |
-          echo "========================================"
-          echo "CLANG"
-          echo "========================================"
-
-          clang --version
-
-          echo
-          echo "========================================"
-          echo "LLD"
-          echo "========================================"
-
-          ld.lld --version
-
-          echo
-          echo "========================================"
-          echo "LLVM"
-          echo "========================================"
-
-          llvm-ar --version
-          llvm-nm --version
-          llvm-strip --version
-
-      - name: Inspect Defconfigs
+      - name: Check Build Configuration
         run: |
           cd kernel
 
-          echo "========================================"
-          echo "ALL DEFCONFIGS"
-          echo "========================================"
+          echo "===== BUILD CONFIGS ====="
+
+          ls -1 build.config*
+
+          echo
+          echo "===== MSM COMMON ====="
+
+          cat build.config.msm.common
+
+          echo
+          echo "===== AARCH64 ====="
+
+          cat build.config.aarch64
+
+          echo
+          echo "===== MODULE LIST ====="
+
+          cat modules.list.msm.lahaina
+
+      - name: Find Device Config
+        run: |
+          cd kernel
+
+          echo "===== DEFCONFIGS ====="
 
           find arch/arm64/configs \
             -type f \
@@ -91,24 +84,23 @@ jobs:
             | sort
 
           echo
-          echo "========================================"
-          echo "HOLI/QGKI REFERENCES"
-          echo "========================================"
+          echo "===== HOLI/QGKI/SM6375 REFERENCES ====="
 
           grep -RniE \
-            "holi|qgki|luigi|sm6375" \
+            "holi|qgki|sm6375|lahaina|luigi" \
             arch/arm64/configs \
             2>/dev/null \
             | head -100 || true
 
-      - name: Build With Device Defconfig
+      - name: Prepare Kernel Configuration
         run: |
-          set -e
-
           cd kernel
 
           export ARCH=arm64
           export SUBARCH=arm64
+
+          export CC=clang
+          export LD=ld.lld
 
           export LLVM=1
           export LLVM_IAS=1
@@ -116,52 +108,33 @@ jobs:
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
-          echo "========================================"
-          echo "TOOLCHAIN"
-          echo "========================================"
+          echo "===== TOOLCHAIN ====="
 
           clang --version
           ld.lld --version
 
           echo
-          echo "========================================"
-          echo "SEARCHING FOR QGKI DEFCONFIG"
-          echo "========================================"
+          echo "===== USING EXISTING DEVICE DEFCONFIG ====="
 
           DEFCONFIG=$(find arch/arm64/configs \
             -type f \
             -name "*defconfig" \
-            | grep -Ei "holi|qgki|sm6375|luigi" \
+            | grep -Ei "holi|qgki|sm6375|lahaina|luigi" \
             | head -1 || true)
 
           if [ -z "$DEFCONFIG" ]; then
-            echo "No Holi/QGKI-specific defconfig found."
-            echo
-            echo "Available defconfigs:"
-            find arch/arm64/configs \
-              -type f \
-              -name "*defconfig" \
-              | sort
+            echo "ERROR: Device defconfig not found."
             exit 1
           fi
 
           echo "Found:"
           echo "$DEFCONFIG"
 
-          DEFCONFIG_NAME="${DEFCONFIG#arch/arm64/configs/}"
-          DEFCONFIG_NAME="${DEFCONFIG_NAME%.config}"
+          DEFCONFIG_NAME=$(basename "$DEFCONFIG" .config)
 
           echo
-          echo "========================================"
-          echo "DEFCONFIG NAME"
-          echo "========================================"
-
+          echo "Defconfig:"
           echo "$DEFCONFIG_NAME"
-
-          echo
-          echo "========================================"
-          echo "CREATE CONFIG"
-          echo "========================================"
 
           make O=out \
             ARCH=arm64 \
@@ -170,19 +143,30 @@ jobs:
             "$DEFCONFIG_NAME"
 
           echo
-          echo "========================================"
-          echo "IMPORTANT CONFIG"
-          echo "========================================"
+          echo "===== CONFIGURATION ====="
 
           grep -E \
             'CONFIG_(MODULES|MODVERSIONS|CFI_CLANG|LTO|LTO_CLANG|LTO_NONE|SHADOW_CALL_STACK|STACKPROTECTOR|QCA_CLD_WLAN|MSM_BT_POWER|BTFM_SLIM|MSM_RDBG)=' \
             out/.config \
             || true
 
-          echo
-          echo "========================================"
-          echo "BUILD"
-          echo "========================================"
+      - name: Build Kernel
+        run: |
+          cd kernel
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+
+          export CC=clang
+          export LD=ld.lld
+
+          export LLVM=1
+          export LLVM_IAS=1
+
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+          echo "===== BUILD KERNEL ====="
 
           make -j2 \
             O=out \
@@ -190,30 +174,140 @@ jobs:
             LLVM=1 \
             LLVM_IAS=1 \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image \
+            modules
 
-      - name: Show Build Output
-        if: always()
+      - name: Install Modules
         run: |
           cd kernel
 
-          echo "========================================"
-          echo "KERNEL OUTPUT"
-          echo "========================================"
+          export ARCH=arm64
+          export LLVM=1
+          export LLVM_IAS=1
 
-          find out/arch/arm64/boot \
-            -maxdepth 2 \
-            -type f \
-            -print 2>/dev/null || true
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
+
+          rm -rf modules_out
+
+          mkdir -p modules_out
+
+          make \
+            O=out \
+            ARCH=arm64 \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            INSTALL_MOD_PATH="$PWD/modules_out" \
+            INSTALL_MOD_STRIP=1 \
+            modules_install
+
+      - name: Generate Module Metadata
+        run: |
+          cd kernel
+
+          KVER=$(find modules_out/lib/modules \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -printf "%f\n" \
+            | head -1)
+
+          echo "KERNEL RELEASE:"
+          echo "$KVER"
+
+          MODDIR="modules_out/lib/modules/$KVER"
 
           echo
-          echo "========================================"
-          echo "CONFIG"
-          echo "========================================"
+          echo "===== MODULES ====="
 
-          if [ -f out/.config ]; then
-            grep -E \
-              'CONFIG_(MODULES|MODVERSIONS|CFI_CLANG|LTO|LTO_CLANG|LTO_NONE|SHADOW_CALL_STACK|STACKPROTECTOR|QCA_CLD_WLAN|MSM_BT_POWER|BTFM_SLIM|MSM_RDBG)=' \
-              out/.config \
-              || true
-          fi
+          find "$MODDIR" \
+            -type f \
+            -name "*.ko" \
+            | sort
+
+          echo
+          echo "===== METADATA ====="
+
+          ls -lah "$MODDIR"
+
+          echo
+          echo "===== IMPORTANT MODULES ====="
+
+          find "$MODDIR" \
+            -type f \
+            \( \
+              -iname "*wlan*.ko" \
+              -o -iname "*qca*.ko" \
+              -o -iname "*bt*.ko" \
+              -o -iname "*camera*.ko" \
+              -o -iname "*sensor*.ko" \
+            \) \
+            -print
+
+      - name: Verify Module ABI
+        run: |
+          cd kernel
+
+          KVER=$(find modules_out/lib/modules \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -printf "%f\n" \
+            | head -1)
+
+          MODDIR="modules_out/lib/modules/$KVER"
+
+          echo "===== KERNEL RELEASE ====="
+          cat out/include/config/kernel.release 2>/dev/null || true
+
+          echo
+          echo "===== MODULE VERMAGIC ====="
+
+          find "$MODDIR" \
+            -type f \
+            -name "*.ko" \
+            | while read module; do
+                echo
+                echo "----- $module -----"
+                modinfo "$module" 2>/dev/null \
+                  | grep -E "^(name|depends|vermagic):" \
+                  || true
+              done
+
+      - name: Prepare Artifact
+        run: |
+          cd kernel
+
+          mkdir -p ../artifact
+
+          cp out/arch/arm64/boot/Image \
+            ../artifact/Image
+
+          KVER=$(find modules_out/lib/modules \
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -printf "%f\n" \
+            | head -1)
+
+          mkdir -p \
+            ../artifact/vendor/lib/modules
+
+          cp -a \
+            "modules_out/lib/modules/$KVER/." \
+            ../artifact/vendor/lib/modules/
+
+          cd ../artifact
+
+          zip -r9 \
+            ../Cyber-Holi-Kernel-Build.zip \
+            .
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cyber-Holi-Kernel-Build
+          path: Cyber-Holi-Kernel-Build.zip
