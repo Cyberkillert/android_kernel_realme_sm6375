@@ -10,7 +10,7 @@ jobs:
     steps:
 
       # ============================================================
-      # CHECKOUT KERNEL SOURCE
+      # CHECKOUT
       # ============================================================
 
       - name: Checkout Source
@@ -50,49 +50,54 @@ jobs:
             binutils-arm-linux-gnueabi
 
       # ============================================================
-      # ANDROID CLANG 21
-      #
-      # Stock kernel reported:
-      #
-      # clang version 21.0.0
-      # LLD 21.0.0
-      #
+      # ANDROID CLANG
       # ============================================================
 
-      - name: Download Android Clang 21
+      - name: Clone Android LLVM Toolchain
         run: |
           set -e
 
           mkdir -p toolchain
 
-          echo "Downloading Android LLVM toolchain..."
-
           git clone --depth=1 \
             https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 \
             toolchain/clang
 
-          echo "Available Clang versions:"
-          find toolchain/clang -maxdepth 2 -type d | sort | head -50
+          echo "Available Clang toolchains:"
+          find toolchain/clang \
+            -maxdepth 2 \
+            -type d \
+            -name "clang-r*" \
+            | sort
 
       # ============================================================
-      # PREPARE CLANG
+      # SELECT CLANG
       # ============================================================
 
-      - name: Select Clang 21
+      - name: Select Clang Toolchain
         run: |
           set -e
 
-          CLANG_DIR=$(find toolchain/clang -maxdepth 2 -type d -name "clang-r*" | sort | tail -1)
+          CLANG_DIR=$(find toolchain/clang \
+            -maxdepth 2 \
+            -type d \
+            -name "clang-r*" \
+            | sort \
+            | tail -1)
 
           if [ -z "$CLANG_DIR" ]; then
-            echo "ERROR: Android Clang toolchain was not found."
+            echo "ERROR: Clang toolchain not found."
             exit 1
           fi
 
-          echo "Using:"
+          echo "========================================"
+          echo " USING CLANG "
+          echo "========================================"
+
           echo "$CLANG_DIR"
 
           echo "CLANG_DIR=$CLANG_DIR" >> "$GITHUB_ENV"
+
           echo "$GITHUB_WORKSPACE/$CLANG_DIR/bin" >> "$GITHUB_PATH"
 
           "$GITHUB_WORKSPACE/$CLANG_DIR/bin/clang" --version
@@ -102,7 +107,7 @@ jobs:
       # BUILD KERNEL
       # ============================================================
 
-      - name: Build Kernel + Modules
+      - name: Build Kernel
         run: |
           set -e
 
@@ -139,21 +144,50 @@ jobs:
 
           make $MAKE_ARGS vendor/holi-qgki_defconfig
 
+          # ========================================================
+          # SDE COMPILER FIX
+          # ========================================================
+
           echo "========================================"
-          echo " STOCK COMPATIBILITY CONFIG "
+          echo " FIXING SDE RM COMPILER ERROR "
           echo "========================================"
 
-          # --------------------------------------------------------
-          # The stock kernel uses:
-          #
-          # CONFIG_CFI_CLANG=y
-          # CONFIG_LTO=y
-          # CONFIG_SHADOW_CALL_STACK=y
-          # CONFIG_MODULES=y
-          # CONFIG_MODVERSIONS=y
-          #
-          # Your uploaded defconfig differs here.
-          # --------------------------------------------------------
+          if grep -q \
+            "const struct sde_pingpong_cfg \*pp_cfg;" \
+            techpack/display/msm/sde/sde_rm.c; then
+
+            sed -i \
+              's/const struct sde_pingpong_cfg \*pp_cfg;/const struct sde_pingpong_cfg *pp_cfg = NULL;/' \
+              techpack/display/msm/sde/sde_rm.c
+
+            echo "sde_rm.c patched successfully."
+
+          else
+
+            echo "WARNING: Expected pp_cfg declaration not found."
+            echo "Checking current declaration:"
+
+            grep -n \
+              "sde_pingpong_cfg.*pp_cfg" \
+              techpack/display/msm/sde/sde_rm.c \
+              || true
+
+          fi
+
+          echo
+          echo "Current pp_cfg declaration:"
+          grep -n \
+            "sde_pingpong_cfg.*pp_cfg" \
+            techpack/display/msm/sde/sde_rm.c \
+            || true
+
+          # ========================================================
+          # STOCK KERNEL CONFIGURATION
+          # ========================================================
+
+          echo "========================================"
+          echo " APPLYING STOCK CONFIG SETTINGS "
+          echo "========================================"
 
           scripts/config --file out/.config \
             --enable CFI_CLANG \
@@ -163,70 +197,73 @@ jobs:
             --enable MODULE_UNLOAD \
             --enable MODVERSIONS
 
-          # --------------------------------------------------------
-          # Keep the vendor drivers as MODULES.
-          #
-          # DO NOT convert these to built-in.
-          # Stock device reports these as =m.
-          # --------------------------------------------------------
-
+          # Keep vendor drivers as modules.
           scripts/config --file out/.config \
             --module MSM_BT_POWER \
             --module BTFM_SLIM \
             --module QCA_CLD_WLAN \
             --module MSM_RDBG
 
-          # --------------------------------------------------------
-          # Ensure LTO is not explicitly forced to NONE.
-          # --------------------------------------------------------
-
+          # Disable explicit LTO_NONE.
           scripts/config --file out/.config \
             --disable LTO_NONE
 
-          # --------------------------------------------------------
-          # Resolve dependencies.
-          # --------------------------------------------------------
+          # ========================================================
+          # RESOLVE CONFIG DEPENDENCIES
+          # ========================================================
+
+          echo "========================================"
+          echo " RUNNING OLDDEFCONFIG "
+          echo "========================================"
 
           make $MAKE_ARGS olddefconfig
 
+          # ========================================================
+          # CONFIG VERIFICATION
+          # ========================================================
+
           echo "========================================"
-          echo " FINAL CONFIG CHECK "
+          echo " FINAL CONFIG "
           echo "========================================"
 
           grep -E \
             "CONFIG_(CFI_CLANG|LTO|LTO_CLANG|LTO_NONE|SHADOW_CALL_STACK|MODULES|MODULE_UNLOAD|MODVERSIONS|MSM_BT_POWER|BTFM_SLIM|QCA_CLD_WLAN|MSM_RDBG)=" \
-            out/.config || true
+            out/.config \
+            || true
 
           echo
           echo "========================================"
-          echo " EXPECTED VENDOR DRIVERS "
+          echo " MODULE CONFIGURATION "
           echo "========================================"
 
           grep -E \
             "^CONFIG_(MSM_BT_POWER|BTFM_SLIM|QCA_CLD_WLAN|MSM_RDBG)=" \
-            out/.config || true
+            out/.config \
+            || true
 
-          echo
+          # ========================================================
+          # BUILD
+          # ========================================================
+
           echo "========================================"
-          echo " BUILD KERNEL "
+          echo " BUILDING KERNEL + MODULES "
           echo "========================================"
 
-          make -j"$(nproc)" $MAKE_ARGS \
+          make -j"$(nproc)" \
+            $MAKE_ARGS \
             Image \
             modules \
             modules_prepare
 
           echo
           echo "========================================"
-          echo " BUILD COMPLETE "
+          echo " KERNEL BUILD COMPLETE "
           echo "========================================"
 
           ls -lh out/arch/arm64/boot/Image
 
       # ============================================================
       # INSTALL MODULES
-      #
-      # Keep modules because stock device uses them.
       # ============================================================
 
       - name: Install Kernel Modules
@@ -261,16 +298,18 @@ jobs:
             INSTALL_MOD_STRIP=1 \
             modules_install
 
+          echo
           echo "========================================"
-          echo " MODULE DIRECTORY "
+          echo " BUILT MODULES "
           echo "========================================"
 
-          find out/modules_staging/lib/modules \
-            -maxdepth 2 -type f \
+          find out/modules_staging \
+            -type f \
+            -name "*.ko" \
             | sort
 
       # ============================================================
-      # CHECK MODULES
+      # VERIFY MODULES
       # ============================================================
 
       - name: Verify Modules
@@ -278,78 +317,34 @@ jobs:
           set -e
 
           KVER=$(find out/modules_staging/lib/modules \
-            -mindepth 1 -maxdepth 1 -type d \
-            -printf "%f\n" | head -1)
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -printf "%f\n" \
+            | head -1)
 
           if [ -z "$KVER" ]; then
-            echo "ERROR: No kernel module directory generated."
+            echo "ERROR: Kernel module directory not found."
             exit 1
           fi
 
-          echo "Kernel module release:"
+          echo "========================================"
+          echo " MODULE RELEASE "
+          echo "========================================"
+
           echo "$KVER"
 
-          echo
-          echo "Generated modules:"
-
-          find "out/modules_staging/lib/modules/$KVER" \
-            -type f -name "*.ko" | sort
+          MODDIR="out/modules_staging/lib/modules/$KVER"
 
           echo
           echo "========================================"
-          echo " REQUIRED MODULES "
+          echo " MODULE FILES "
           echo "========================================"
 
-          for module in \
-            btpower \
-            bt_fm_slim \
-            wlan \
-            rdbg
-          do
-            echo "Searching for $module..."
-
-            find "out/modules_staging/lib/modules/$KVER" \
-              -type f \
-              \( -name "$module.ko" \
-                 -o -name "${module}_dlkm.ko" \) \
-              -print
-          done
-
-      # ============================================================
-      # PREPARE MODULE METADATA
-      # ============================================================
-
-      - name: Generate Module Metadata
-        run: |
-          set -e
-
-          export ARCH=arm64
-
-          export PATH="$GITHUB_WORKSPACE/$CLANG_DIR/bin:$PATH"
-
-          MAKE_ARGS="
-          ARCH=arm64
-          O=out
-          CC=clang
-          LLVM=1
-          LLVM_IAS=1
-          CROSS_COMPILE=aarch64-linux-gnu-
-          CROSS_COMPILE_ARM32=arm-linux-gnueabi-
-          "
-
-          KVER=$(find out/modules_staging/lib/modules \
-            -mindepth 1 -maxdepth 1 -type d \
-            -printf "%f\n" | head -1)
-
-          MODDIR="$PWD/out/modules_staging/lib/modules/$KVER"
-
-          echo "Module directory:"
-          echo "$MODDIR"
-
-          # Generate aliases/dependencies from the built modules.
-          make $MAKE_ARGS \
-            INSTALL_MOD_PATH="$PWD/out/modules_staging" \
-            modules_install
+          find "$MODDIR" \
+            -type f \
+            -name "*.ko" \
+            | sort
 
           echo
           echo "========================================"
@@ -358,16 +353,11 @@ jobs:
 
           ls -lah "$MODDIR"
 
-          echo
-          echo "modules.dep:"
-          test -f "$MODDIR/modules.dep" && head -50 "$MODDIR/modules.dep" || true
-
       # ============================================================
       # PREPARE ANYKERNEL3
       #
-      # NO MANUAL DTB
-      # NO DTB SCRIPT
-      # MODULES ARE INCLUDED
+      # NO MANUAL DTB CODE
+      # MODULES INCLUDED
       # ============================================================
 
       - name: Prepare AnyKernel3
@@ -375,15 +365,14 @@ jobs:
           set -e
 
           echo "========================================"
-          echo " COPY KERNEL IMAGE "
+          echo " COPYING KERNEL IMAGE "
           echo "========================================"
 
           cp out/arch/arm64/boot/Image \
             AnyKernel3/Image
 
           # --------------------------------------------------------
-          # Remove accidental DTB payloads.
-          # We are not manually handling DTB here.
+          # Remove manually supplied DTB payloads.
           # --------------------------------------------------------
 
           rm -f AnyKernel3/dtb
@@ -392,7 +381,7 @@ jobs:
           rm -f AnyKernel3/recovery_dtbo
 
           # --------------------------------------------------------
-          # Remove old module directory.
+          # Remove old modules.
           # --------------------------------------------------------
 
           rm -rf AnyKernel3/modules
@@ -401,53 +390,61 @@ jobs:
             AnyKernel3/modules/vendor/lib/modules
 
           KVER=$(find out/modules_staging/lib/modules \
-            -mindepth 1 -maxdepth 1 -type d \
-            -printf "%f\n" | head -1)
+            -mindepth 1 \
+            -maxdepth 1 \
+            -type d \
+            -printf "%f\n" \
+            | head -1)
 
-          MODDIR="$PWD/out/modules_staging/lib/modules/$KVER"
+          MODDIR="out/modules_staging/lib/modules/$KVER"
 
           echo "========================================"
           echo " COPYING MODULES "
           echo "========================================"
 
           find "$MODDIR" \
-            -type f -name "*.ko" \
-            -exec cp {} AnyKernel3/modules/vendor/lib/modules/ \;
+            -type f \
+            -name "*.ko" \
+            -exec cp {} \
+            AnyKernel3/modules/vendor/lib/modules/ \;
 
           # --------------------------------------------------------
           # Copy module metadata.
           # --------------------------------------------------------
 
-          for f in \
+          for file in \
             modules.alias \
             modules.dep \
             modules.softdep \
             modules.load \
             modules.blocklist
           do
-            if [ -f "$MODDIR/$f" ]; then
-              cp "$MODDIR/$f" \
+
+            if [ -f "$MODDIR/$file" ]; then
+              cp "$MODDIR/$file" \
                 AnyKernel3/modules/vendor/lib/modules/
             fi
+
           done
 
           echo
           echo "========================================"
-          echo " MODULES IN ANYKERNEL "
+          echo " ANYKERNEL MODULES "
           echo "========================================"
 
           find AnyKernel3/modules \
-            -type f | sort
+            -type f \
+            | sort
 
           echo
-          echo "========================================"
-          echo " MODULE SIZE "
-          echo "========================================"
-
-          du -sh AnyKernel3/modules
+          echo "Module count:"
+          find AnyKernel3/modules \
+            -type f \
+            -name "*.ko" \
+            | wc -l
 
       # ============================================================
-      # WRITE ANYKERNEL SCRIPT
+      # ANYKERNEL SCRIPT
       # ============================================================
 
       - name: Write AnyKernel Script
@@ -493,9 +490,8 @@ jobs:
 
           dump_boot;
 
-          # Modules are included in the ZIP.
-          # Do not manually flash DTB here.
-          if [ -d "$home/modules" ]; then
+          # Install vendor kernel modules
+          if [ -d "$home/modules/vendor" ]; then
             ui_print " ";
             ui_print "Installing kernel modules...";
             cp -rf "$home/modules/vendor" "$SYSTEM_ROOT/";
@@ -513,35 +509,27 @@ jobs:
           cat AnyKernel3/anykernel.sh
 
       # ============================================================
-      # VERIFY PACKAGE
+      # PACKAGE VERIFICATION
       # ============================================================
 
-      - name: Verify AnyKernel Package
+      - name: Verify AnyKernel Files
         run: |
           set -e
 
           echo "========================================"
-          echo " ANYKERNEL FILES "
-          echo "========================================"
-
-          find AnyKernel3 \
-            -maxdepth 4 \
-            -type f | sort
-
-          echo
-          echo "========================================"
-          echo " IMAGE "
+          echo " KERNEL IMAGE "
           echo "========================================"
 
           ls -lh AnyKernel3/Image
 
           echo
           echo "========================================"
-          echo " MODULE COUNT "
+          echo " MODULES "
           echo "========================================"
 
           find AnyKernel3/modules \
-            -type f -name "*.ko" | wc -l
+            -type f \
+            | sort
 
           echo
           echo "========================================"
@@ -550,9 +538,12 @@ jobs:
 
           if [ -e AnyKernel3/dtb ] || \
              [ -e AnyKernel3/dtb.img ] || \
-             [ -e AnyKernel3/dt ]; then
-            echo "ERROR: DTB payload unexpectedly exists."
+             [ -e AnyKernel3/dt ] || \
+             [ -e AnyKernel3/recovery_dtbo ]; then
+
+            echo "ERROR: Unexpected DTB payload found."
             exit 1
+
           fi
 
           echo "No manually packaged DTB."
@@ -595,11 +586,36 @@ jobs:
 
           echo
           echo "========================================"
+          echo " KERNEL IMAGE "
+          echo "========================================"
+
+          unzip -l Cyber-Holi-Kernel.zip \
+            | grep -E '/?Image$' \
+            || true
+
+          echo
+          echo "========================================"
           echo " MODULES "
           echo "========================================"
 
           unzip -l Cyber-Holi-Kernel.zip \
-            | grep -E '\.ko$' || true
+            | grep -E '\.ko$' \
+            || true
+
+          echo
+          echo "========================================"
+          echo " DTB CHECK "
+          echo "========================================"
+
+          if unzip -l Cyber-Holi-Kernel.zip \
+             | grep -E '(^|/)(dtb|dtb\.img|dt|recovery_dtbo)$'; then
+
+            echo "ERROR: DTB found in ZIP."
+            exit 1
+
+          fi
+
+          echo "No manually packaged DTB."
 
           echo
           echo "========================================"
@@ -609,7 +625,7 @@ jobs:
           ls -lh Cyber-Holi-Kernel.zip
 
       # ============================================================
-      # ARTIFACT
+      # UPLOAD
       # ============================================================
 
       - name: Upload Artifact
