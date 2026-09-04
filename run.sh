@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# lisa.sh — minimal kernel build script for Xiaomi Lisa (SM7325 / Snapdragon 778G)
+# run.sh — minimal kernel build script for Realme 10 Pro 5G (SM6375 / holi)
 # Adapted from YAKB (cyberknight777), debloated for solo use.
 
 set -e
@@ -59,8 +59,17 @@ if [ ! -d "${AK3}" ]; then
 	git clone --depth=1 https://github.com/Tashar02/AnyKernel3 -b 5.4 "${AK3}"
 fi
 
-export KBUILD_BUILD_USER="lucifer"
-export KBUILD_BUILD_HOST="Codespaces"
+export KBUILD_BUILD_USER="root"
+export KBUILD_BUILD_HOST="d58d238bcd7f"
+
+# Stock uname -r on-device is: 5.4.302-qgki-g84e7d691ee3a
+# CONFIG_LOCALVERSION_AUTO normally appends "-g<hash>" from the tree's git
+# HEAD, which won't match the stock hash unless you happen to be building
+# from that exact commit. Force it off and hardcode the full stock suffix so
+# the built kernel's `uname -r` matches exactly — mismatches here are what
+# cause vermagic bootloops on this device.
+STOCK_LOCALVERSION="-qgki-g84e7d691ee3a"
+export STOCK_LOCALVERSION
 
 tg() {
 	local response
@@ -111,6 +120,9 @@ clean() {
 
 rgn() {
 	echo -e "\n\e[1;93m[*] Regenerating defconfig...\e[0m"
+	"${KDIR}/scripts/config" --file "${KDIR}/arch/arm64/configs/${CONFIG}" \
+		-d LOCALVERSION_AUTO \
+		--set-str LOCALVERSION "${STOCK_LOCALVERSION}"
 	make "${MAKE[@]}" "${CONFIG}" || abort "Failed to regenerate defconfig!"
 	cp "${OUT_DIR}"/.config "${KDIR}/arch/arm64/configs/${CONFIG}"
 }
