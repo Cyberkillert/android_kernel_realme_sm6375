@@ -1148,7 +1148,7 @@ static bool md_unregister_memory_dump(char *name)
 	return true;
 }
 
-static void update_dump_size(char *name, size_t size,
+static void __maybe_unused update_dump_size(char *name, size_t size,
 		char **addr, size_t *dump_size)
 {
 	if ((*dump_size) == 0) {
